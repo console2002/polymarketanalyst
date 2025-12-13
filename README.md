@@ -1,4 +1,4 @@
-# Polymarket Analyst (v0.1)
+# Polymarket Analyst (v0.2)
 
 A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down prediction markets**. It fetches real-time contract prices and compares them with the current Binance spot price to identify potential arbitrage opportunities or mispricings.
 
@@ -8,6 +8,7 @@ A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down pr
 - **Real-time Monitoring**: Fetches live contract prices from Polymarket's CLOB (Central Limit Order Book).
 - **Strike Comparison**: Compares the market's strike price (Open Price) with the current Binance spot price.
 - **Probability Analysis**: Displays real-time "Yes" (Up) and "No" (Down) contract prices.
+- **Data Logging & Visualization**: Record market history and view it in an interactive dashboard.
 
 ## Installation
 
@@ -15,25 +16,30 @@ A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down pr
 
 2. Install dependencies:
    ```bash
-   pip install requests pytz
+   pip install requests pytz streamlit pandas plotly
    ```
 
 ## Usage
 
-Run the main bot script:
-
+### 1. Basic Monitor
+Run the simple console bot:
 ```bash
 python arbitrage_bot.py
 ```
 
-### Sample Output
+### 2. Data Dashboard (New!)
+To visualize market data over time:
 
-```text
-[16:58:24] Checking Polymarket...
-MARKET INFO | Start: 2025-12-13 15:45:00+00:00 | Exp: 2025-12-13 16:00:00+00:00
-PRICES      | Strike: $90,102.58 | Current: $90,089.43
-CONTRACTS   | Up: $0.290 | Down: $0.730
-STATUS      | Current is BELOW Strike by $13.15
+**Step A: Start the Data Logger**
+Open a terminal and run this to start collecting data to `market_data.csv`:
+```bash
+python data_logger.py
+```
+
+**Step B: Launch the Dashboard**
+Open a **new** terminal and run:
+```bash
+python -m streamlit run dashboard.py
 ```
 
 ## Logic Explained
