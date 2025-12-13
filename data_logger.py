@@ -15,16 +15,19 @@ def init_csv():
 
 def log_data():
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print(f"[{timestamp}] Fetching data...")
     
-    data, err = fetch_polymarket_data_struct()
+    fetched_data, err = fetch_polymarket_data_struct()
     
-    if err:
-        print(f"Error fetching data: {err}")
-        return
-
-    if not data:
-        print("No data returned.")
+    # Check if data is complete
+    data = None
+    if fetched_data and \
+       fetched_data.get('price_to_beat') is not None and \
+       fetched_data.get('current_price') is not None and \
+       fetched_data.get('prices') is not None:
+         data = fetched_data
+    else:
+        error_msg = err if err else "Missing fields"
+        print(f"[{timestamp}] Error: Could not retrieve full data ({error_msg})")
         return
 
     # Extract values
@@ -41,7 +44,7 @@ def log_data():
         writer = csv.writer(file)
         writer.writerow(row)
         
-    print(f"Logged: Strike={strike}, Current={current_price}, Up={up_price}, Down={down_price}")
+    print(f"[{timestamp}] Logged: Strike={strike}, Current={current_price}, Up={up_price}, Down={down_price}")
 
 def main():
     print("Starting Data Logger...")
@@ -50,13 +53,13 @@ def main():
     while True:
         try:
             log_data()
-            time.sleep(15) # Log every 15 seconds
+            time.sleep(10) # Log every 10 seconds
         except KeyboardInterrupt:
             print("\nStopping logger...")
             break
         except Exception as e:
             print(f"Error: {e}")
-            time.sleep(5)
+            time.sleep(10)   
 
 if __name__ == "__main__":
     main()
