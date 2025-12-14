@@ -80,6 +80,7 @@ class Backtester:
         self.open_positions = [] # Changed to a list to allow multiple open positions per market
         self.market_data = pd.DataFrame()
         self.market_history = {} # Stores historical data grouped by market for resolution
+        self.pending_market_summaries = {} # Key: market_id_tuple, Value: list of resolved_position_info dictionaries
 
     def load_data(self, file_path):
         if not os.path.exists(file_path):
@@ -191,12 +192,8 @@ class Backtester:
         for ts_np in unique_timestamps:
             current_timestamp = pd.to_datetime(ts_np)
             
-            # Use a list to hold positions to remove to avoid modifying list during iteration
             positions_to_remove_indices = []
             
-            # Collect all resolved positions at this timestamp, grouped by market_id_tuple
-            resolved_positions_collector = {} # Key: market_id_tuple, Value: list of individual position resolution details
-
             # Process open positions for expiration at current_timestamp or earlier
             for i, position in enumerate(self.open_positions):
                 if current_timestamp >= position['expiration']:
@@ -204,9 +201,9 @@ class Backtester:
                     
                     resolved_info = self._resolve_single_position(market_id_tuple, position, current_timestamp)
                     
-                    if market_id_tuple not in resolved_positions_collector:
-                        resolved_positions_collector[market_id_tuple] = []
-                    resolved_positions_collector[market_id_tuple].append(resolved_info)
+                    if market_id_tuple not in self.pending_market_summaries:
+                        self.pending_market_summaries[market_id_tuple] = []
+                    self.pending_market_summaries[market_id_tuple].append(resolved_info)
                     
                     positions_to_remove_indices.append(i)
             
@@ -214,14 +211,8 @@ class Backtester:
             for index in sorted(positions_to_remove_indices, reverse=True):
                 del self.open_positions[index]
 
-            # Print summary for markets that are fully resolved at this timestamp
-            for market_id_tuple, resolutions_data in resolved_positions_collector.items():
-                # A market is fully resolved at this timestamp if all its positions expired
-                # and none are remaining in self.open_positions. Given that we delete positions
-                # from open_positions for which current_timestamp >= expiration,
-                # any market_id_tuple in resolved_positions_collector means all its positions
-                # with this expiration have been resolved.
-                self._print_market_summary(market_id_tuple, resolutions_data)
+            # Check for markets that are now fully resolved and print their summary
+            # This logic is moved to the end of run_strategy to ensure all positions for all markets are processed.
 
             # Get all data points for the current timestamp
             current_data_points = self.market_data[self.market_data['Timestamp'] == current_timestamp]
@@ -256,25 +247,27 @@ class Backtester:
                             'Value': cost,
                             'PnL': -cost # Initial PnL is the cost of investment
                         })
-                        print(f"[{current_timestamp.strftime('%Y-%m-%d %H:%M:%S')}] BOUGHT {quantity} shares of {side} in market ({market_id_tuple[0].strftime('%Y-%m-%d %H:%M:%S')}, {market_id_tuple[1].strftime('%Y-%m-%d %H:%M:%S')}) at ${entry_price:.2f}. Capital: ${self.capital:.2f}")
+                        #print(f"[{current_timestamp.strftime('%Y-%m-%d %H:%M:%S')}] BOUGHT {quantity} shares of {side} in market ({market_id_tuple[0].strftime('%Y-%m-%d %H:%M:%S')}, {market_id_tuple[1].strftime('%Y-%m-%d %H:%M:%S')}) at ${entry_price:.2f}. Capital: ${self.capital:.2f}")
                     else:
                         print(f"[{current_timestamp.strftime('%Y-%m-%d %H:%M:%S')}] Insufficient capital to buy {quantity} shares of {side} in market ({market_id_tuple[0].strftime('%Y-%m-%d %H:%M:%S')}, {market_id_tuple[1].strftime('%Y-%m-%d %H:%M:%S')}) (Cost: ${cost:.2f}, Capital: ${self.capital:.2f})")
         
         # After iterating through all timestamps, resolve any remaining open positions
-        # Iterate over a copy of the list for final resolution
-        final_resolved_positions_collector = {}
+        # This will collect any positions that expired after the last recorded current_timestamp
+        # or were still open at the end of the backtest data.
         for position in self.open_positions[:]: # Use a copy to allow modification
             market_id_tuple = position['market_id']
-            resolved_info = self._resolve_single_position(market_id_tuple, position, current_timestamp) # Use last current_timestamp or position['expiration']
+            resolved_info = self._resolve_single_position(market_id_tuple, position, current_timestamp) # Use the last current_timestamp or the position's expiration
             
-            if market_id_tuple not in final_resolved_positions_collector:
-                final_resolved_positions_collector[market_id_tuple] = []
-            final_resolved_positions_collector[market_id_tuple].append(resolved_info)
+            if market_id_tuple not in self.pending_market_summaries:
+                self.pending_market_summaries[market_id_tuple] = []
+            self.pending_market_summaries[market_id_tuple].append(resolved_info)
             self.open_positions.remove(position) # Remove from original list
 
-        for market_id_tuple, resolutions_data in final_resolved_positions_collector.items():
+        # Print summaries for any remaining markets in pending_market_summaries
+        for market_id_tuple, resolutions_data in self.pending_market_summaries.items():
             self._print_market_summary(market_id_tuple, resolutions_data)
-            
+        self.pending_market_summaries.clear() # Clear after all summaries are printed
+
     def generate_report(self):
         print("\n--- Backtest Report ---")
         print(f"Initial Capital: ${self.initial_capital:.2f}")
