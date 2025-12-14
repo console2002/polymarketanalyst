@@ -7,25 +7,31 @@ DATA_FILE = "market_data.csv"
 
 # Global Configuration Variables
 INITIAL_CAPITAL = 1000.0
-SHARE_SIZE = 1000
+SHARE_SIZE = 1
 # New global parameters for the derivative moving average strategy
 DERIVATIVE_MA_PERIOD = 5 # Number of periods for the moving average of the derivative
 DERIVATIVE_THRESHOLD = 0.001 # A small threshold to act as a buffer around zero for derivative MA
+N_TICK_POINT = 2 # Trade on every N-th data point for a given market
 
 class DerivativeMovingAverageStrategy:
     def __init__(self):
-        self.traded_markets = set() # To ensure only one trade per market per strategy instance
+        # self.traded_markets = set() # Removed to allow multiple trades per market
         self.investment_amount = SHARE_SIZE # Use global SHARE_SIZE
         # Store price history for each market to calculate derivative moving average
         # Key: (TargetTime, Expiration)
         # Value: deque of (UpPrice, DownPrice) tuples for DERIVATIVE_MA_PERIOD + 1 entries
         self.market_price_history = {} 
+        self.market_tick_counts = {} # To track the number of data points processed for each market
 
     def decide(self, market_data_point, current_capital):
         market_identifier = (market_data_point['TargetTime'], market_data_point['Expiration'])
         
-        if market_identifier in self.traded_markets:
-            return None # Already traded this market
+        # Increment tick count for this market
+        self.market_tick_counts[market_identifier] = self.market_tick_counts.get(market_identifier, 0) + 1
+
+        # Only consider trading on every N_TICK_POINT-th data point
+        if self.market_tick_counts[market_identifier] % N_TICK_POINT != 0:
+            return None # Skip trade decision for this tick
 
         current_up_price = market_data_point['UpPrice']
         current_down_price = market_data_point['DownPrice']
@@ -61,7 +67,7 @@ class DerivativeMovingAverageStrategy:
             entry_price = current_down_price
         
         if side and (self.investment_amount * entry_price) <= current_capital:
-            self.traded_markets.add(market_identifier)
+            # self.traded_markets.add(market_identifier) # Removed to allow multiple trades
             return (side, self.investment_amount, entry_price)
         
         return None
@@ -71,7 +77,7 @@ class Backtester:
         self.initial_capital = initial_capital
         self.capital = initial_capital
         self.transactions = [] # List of (timestamp, type, market_id, side, quantity, price, value, PnL)
-        self.open_positions = {} # {market_id: {'side': 'Up/Down', 'quantity': 100, 'entry_price': 0.x, 'expiration': datetime}}
+        self.open_positions = [] # Changed to a list to allow multiple open positions per market
         self.market_data = pd.DataFrame()
         self.market_history = {} # Stores historical data grouped by market for resolution
 
@@ -101,17 +107,17 @@ class Backtester:
 
         print(f"Loaded {len(self.market_data)} data points from {file_path}")
 
-    def _resolve_market(self, market_id, position):
+    def _resolve_market(self, market_id_tuple, position):
         """Resolves an expired market position."""
-        if market_id not in self.market_history:
-            print(f"Error: Market history not found for {market_id}")
+        if market_id_tuple not in self.market_history:
+            print(f"Error: Market history not found for {market_id_tuple}")
             return
 
         # Get all data points for this specific market
-        market_specific_data = self.market_history[market_id]
+        market_specific_data = self.market_history[market_id_tuple]
 
         last_dp = market_specific_data[-1]
-        market_id_formatted = f"({market_id[0].strftime('%Y-%m-%d %H:%M:%S')}, {market_id[1].strftime('%Y-%m-%d %H:%M:%S')})"
+        market_id_formatted = f"({market_id_tuple[0].strftime('%Y-%m-%d %H:%M:%S')}, {market_id_tuple[1].strftime('%Y-%m-%d %H:%M:%S')})"
 
 
         winning_side = None
@@ -138,7 +144,7 @@ class Backtester:
         self.transactions.append({
             'Timestamp': last_dp['Timestamp'],
             'Type': 'Resolution',
-            'MarketID': market_id,
+            'MarketID': market_id_tuple,
             'Side': position['side'],
             'Quantity': position['quantity'],
             'EntryPrice': position['entry_price'],
@@ -147,7 +153,7 @@ class Backtester:
             'WinningSide': winning_side
         })
         
-        print(f"Resolved market ({market_id[0].strftime('%Y-%m-%d %H:%M:%S')}, {market_id[1].strftime('%Y-%m-%d %H:%M:%S')}): Trade Side: {position['side']}, Winning Side: {winning_side}. PnL: ${pnl:.2f}")
+        print(f"Resolved market ({market_id_tuple[0].strftime('%Y-%m-%d %H:%M:%S')}, {market_id_tuple[1].strftime('%Y-%m-%d %H:%M:%S')}): Trade Side: {position['side']}, Winning Side: {winning_side}. PnL: ${pnl:.2f}")
 
 
     def run_strategy(self, strategy_instance):
@@ -158,24 +164,21 @@ class Backtester:
             current_timestamp = pd.to_datetime(ts_np)
             
             # Process open positions for expiration at current_timestamp or earlier
-            expired_market_ids = []
-            for market_id, position in self.open_positions.items():
+            # Iterate over a copy of the list to allow modification during iteration
+            resolving_positions = self.open_positions[:]
+            for position in resolving_positions:
                 if current_timestamp >= position['expiration']:
-                    self._resolve_market(market_id, position)
-                    expired_market_ids.append(market_id)
+                    self._resolve_market(position['market_id'], position)
+                    self.open_positions.remove(position) # Remove from the original list
             
-            for market_id in expired_market_ids:
-                del self.open_positions[market_id]
-
             # Get all data points for the current timestamp
             current_data_points = self.market_data[self.market_data['Timestamp'] == current_timestamp]
 
             for _, row in current_data_points.iterrows():
-                market_id = (row['TargetTime'], row['Expiration'])
+                market_id_tuple = (row['TargetTime'], row['Expiration'])
                 
-                # If market is already open, skip. The strategy ensures only one trade per market.
-                if market_id in self.open_positions:
-                    continue
+                # The strategy is now responsible for deciding when to trade,
+                # we no longer prevent multiple trades per market here.
 
                 trade_decision = strategy_instance.decide(row, self.capital)
                 
@@ -187,32 +190,33 @@ class Backtester:
 
                         self.capital -= cost
 
-                        self.open_positions[market_id] = {
+                        self.open_positions.append({ # Append to list
+                            'market_id': market_id_tuple, # Store market_id explicitly
                             'side': side,
                             'quantity': quantity,
                             'entry_price': entry_price,
                             'expiration': row['Expiration']
-                        }
+                        })
                         self.transactions.append({
                             'Timestamp': current_timestamp,
                             'Type': 'Buy',
-                            'MarketID': market_id,
+                            'MarketID': market_id_tuple,
                             'Side': side,
                             'Quantity': quantity,
                             'EntryPrice': entry_price,
                             'Value': cost,
                             'PnL': -cost # Initial PnL is the cost of investment
                         })
-                        print(f"[{current_timestamp.strftime('%Y-%m-%d %H:%M:%S')}] BOUGHT {quantity} shares of {side} in market ({market_id[0].strftime('%Y-%m-%d %H:%M:%S')}, {market_id[1].strftime('%Y-%m-%d %H:%M:%S')}) at ${entry_price:.2f}. Capital: ${self.capital:.2f}")
+                        print(f"[{current_timestamp.strftime('%Y-%m-%d %H:%M:%S')}] BOUGHT {quantity} shares of {side} in market ({market_id_tuple[0].strftime('%Y-%m-%d %H:%M:%S')}, {market_id_tuple[1].strftime('%Y-%m-%d %H:%M:%S')}) at ${entry_price:.2f}. Capital: ${self.capital:.2f}")
                     else:
-                        print(f"[{current_timestamp.strftime('%Y-%m-%d %H:%M:%S')}] Insufficient capital to buy {quantity} shares of {side} in market ({market_id[0].strftime('%Y-%m-%d %H:%M:%S')}, {market_id[1].strftime('%Y-%m-%d %H:%M:%S')}) (Cost: ${cost:.2f}, Capital: ${self.capital:.2f})")
+                        print(f"[{current_timestamp.strftime('%Y-%m-%d %H:%M:%S')}] Insufficient capital to buy {quantity} shares of {side} in market ({market_id_tuple[0].strftime('%Y-%m-%d %H:%M:%S')}, {market_id_tuple[1].strftime('%Y-%m-%d %H:%M:%S')}) (Cost: ${cost:.2f}, Capital: ${self.capital:.2f})")
         
         # After iterating through all timestamps, resolve any remaining open positions
-        remaining_market_ids = list(self.open_positions.keys())
-        for market_id in remaining_market_ids:
-            position = self.open_positions[market_id]
-            self._resolve_market(market_id, position)
-            del self.open_positions[market_id]
+        # Iterate over a copy of the list for final resolution
+        remaining_positions = self.open_positions[:]
+        for position in remaining_positions:
+            self._resolve_market(position['market_id'], position)
+            self.open_positions.remove(position) # Remove from original list
             
     def generate_report(self):
         print("\n--- Backtest Report ---")
