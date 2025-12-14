@@ -10,15 +10,10 @@ A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down pr
 - **Configurable**: The dashboard's data file path is now determined automatically and hardcoded.
 - **Robust Error Handling**: Gracefully handles incomplete data and API failures with a retry mechanism.
 - **CSV Storage**: Historical data stored in `market_data.csv` for analysis, with optional daily rotation.
-- **Data Validation**: Validates price ranges and detects anomalies.
-- **Market Transition Handling**: Detects market transitions and adds a separator to the CSV file.
-- **Monitoring & Statistics**: Tracks and displays statistics such as uptime, success rate, and average logging latency.
 
 ### Interactive Dashboard
 - **Live Auto-Refresh**: Automatically updates periodically (every second) to ensure the latest data is displayed.
-- **Dual Chart View**: Synchronized price and probability charts with linked zoom
 - **Advanced Visualization**:
-  - Price history vs. strike price comparison
   - Probability trends for Up/Down contracts
   - Market transition indicators (vertical lines)
   - Data point markers for clarity
@@ -29,8 +24,6 @@ A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down pr
   - "Reset Zoom" - view all historical data
   - "Zoom Last 15m" - focus on recent activity (follows new data)
   - Scroll zoom and range slider
-  - Unified hover mode with crosshair across both charts
-- **Real-time Metrics**: Current strike price, BTC price, and contract costs
 
 ## Installation
 
@@ -46,12 +39,6 @@ A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down pr
    ```
 
 ## Usage
-
-### Quick Start: Console Monitor
-Run the simple console bot to see current market data:
-```bash
-python arbitrage_bot.py
-```
 
 ### Full Dashboard Experience
 
@@ -81,8 +68,6 @@ The system identifies the **Active Market** by finding the 15-minute interval th
 
 - **Start Time**: Beginning of the 15-minute candle
 - **Expiration**: End of the 15-minute candle  
-- **Strike Price**: BTC price at the Start Time (from Binance)
-- **Current Price**: Real-time BTC price from Binance
 - **Contract Prices**: Live "Yes" (Up) and "No" (Down) prices from Polymarket's CLOB
 
 Contracts pay out based on whether the price at **Expiration** is higher ("Up") or lower ("Down") than the **Strike Price**.
@@ -91,7 +76,6 @@ Contracts pay out based on whether the price at **Expiration** is higher ("Up") 
 
 ```
 PolymarketAnalyst/
-├── __pycache__/                 # Python compiled bytecode cache
 ├── dashboard.py                  # Streamlit dashboard application
 ├── data_logger.py               # Background data collection service
 ├── fetch_current_polymarket.py  # Core market data fetching logic
