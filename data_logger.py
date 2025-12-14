@@ -2,6 +2,7 @@ import time
 import datetime
 import csv
 import os
+import pytz
 from fetch_current_polymarket import fetch_polymarket_data_struct
 
 DATA_FILE = "market_data.csv"
@@ -33,10 +34,13 @@ def log_data():
     # Extract values
     target_time = data.get('target_time_utc', '')
     expiration = data.get('expiration_time_utc', '')
+
+    target_time_str = target_time.strftime('%Y-%m-%d %H:%M:%S') if target_time else ''
+    expiration_str = expiration.strftime('%Y-%m-%d %H:%M:%S') if expiration else ''
     up_price = data['prices'].get('Up', 0.0)
     down_price = data['prices'].get('Down', 0.0)
     
-    row = [timestamp, target_time, expiration, up_price, down_price]
+    row = [timestamp, target_time_str, expiration_str, up_price, down_price]
     
     with open(DATA_FILE, mode='a', newline='') as file:
         writer = csv.writer(file)
