@@ -17,9 +17,12 @@ def init_csv():
         print(f"Created {DATA_FILE}")
 
 def log_data():
-    timestamp = datetime.datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M:%S')
-    
     fetched_data, err = fetch_polymarket_data_struct()
+
+    timestamp_dt = fetched_data.get("polymarket_time_utc") if fetched_data else None
+    if not timestamp_dt:
+        timestamp_dt = datetime.datetime.now(pytz.utc)
+    timestamp = timestamp_dt.strftime('%Y-%m-%d %H:%M:%S')
     
     # Check if data is complete
     data = None
