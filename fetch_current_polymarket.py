@@ -33,6 +33,26 @@ def get_clob_price(token_id):
     except Exception as e:
         return None
 
+def _parse_iso_datetime(value):
+    if not value:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.datetime.fromtimestamp(value, tz=datetime.timezone.utc)
+    if isinstance(value, str):
+        cleaned = value.replace("Z", "+00:00")
+        try:
+            return datetime.datetime.fromisoformat(cleaned)
+        except ValueError:
+            return None
+    return None
+
+def _extract_market_times(market):
+    start_time = _parse_iso_datetime(market.get("startDate")) or _parse_iso_datetime(market.get("startTime"))
+    end_time = _parse_iso_datetime(market.get("endDate")) or _parse_iso_datetime(market.get("endTime"))
+    if not end_time:
+        end_time = _parse_iso_datetime(market.get("expiration"))
+    return start_time, end_time
+
 def get_polymarket_data(slug):
     try:
         # 1. Get Event Details to find Token IDs
@@ -70,7 +90,13 @@ def get_polymarket_data(slug):
             else:
                 prices[outcome] = 0.0
             
-        return prices, None
+        start_time, end_time = _extract_market_times(market)
+
+        return {
+            "prices": prices,
+            "start_time": start_time,
+            "end_time": end_time
+        }, None
     except Exception as e:
         return None, str(e)
 
@@ -91,13 +117,16 @@ def fetch_polymarket_data_struct():
         slug = polymarket_url.split("/")[-1]
         
         # Fetch Data
-        poly_prices, poly_err = get_polymarket_data(slug)
+        poly_data, poly_err = get_polymarket_data(slug)
         
         if poly_err:
             return None, f"Polymarket Error: {poly_err}"
             
+        target_time_utc = poly_data.get("start_time") or target_time_utc
+        expiration_time_utc = poly_data.get("end_time") or expiration_time_utc
+
         return {
-            "prices": poly_prices, # {'Up': 0.xx, 'Down': 0.xx}
+            "prices": poly_data.get("prices", {}), # {'Up': 0.xx, 'Down': 0.xx}
             "slug": slug,
             "target_time_utc": target_time_utc,
             "expiration_time_utc": expiration_time_utc
