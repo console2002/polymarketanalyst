@@ -127,6 +127,7 @@ class Backtester:
             'side': position['side'],
             'quantity': position['quantity'],
             'entry_price': position['entry_price'],
+            'entry_time': position.get('entry_time'),
             'pnl': pnl,
             'winning_side': winning_side
         }
@@ -144,9 +145,12 @@ class Backtester:
         total_down_shares = 0
         total_down_cost = 0.0
         total_market_pnl = 0.0
+        entry_times = []
 
         for res in resolved_positions_data:
             total_market_pnl += res['pnl']
+            if res.get('entry_time') is not None:
+                entry_times.append(res['entry_time'])
             if res['side'] == 'Up':
                 total_up_shares += res['quantity']
                 total_up_cost += res['quantity'] * res['entry_price']
@@ -156,12 +160,15 @@ class Backtester:
 
         avg_up_price = total_up_cost / total_up_shares if total_up_shares > 0 else 0.0
         avg_down_price = total_down_cost / total_down_shares if total_down_shares > 0 else 0.0
+        entry_time_display = "N/A"
+        if entry_times:
+            entry_time_display = min(entry_times).strftime('%Y-%m-%d %H:%M:%S')
 
         print(f"\n--- Market Resolution Summary for {market_id_formatted} ---")
-        print(f"Total PnL for market: ${total_market_pnl:.2f}")
+        print(f"Entry Time: {entry_time_display}")
         print(f"Up Shares: {total_up_shares}, Avg Entry Price: ${avg_up_price:.2f}")
         print(f"Down Shares: {total_down_shares}, Avg Entry Price: ${avg_down_price:.2f}")
-        print("--------------------------------------------------")
+        print(f"----Total PnL for market: ${total_market_pnl:.2f}----")
 
     def run_strategy(self, strategy_instance):
         current_timestamp = None
@@ -201,6 +208,7 @@ class Backtester:
                             'side': position['side'],
                             'quantity': position['quantity'],
                             'entry_price': position['entry_price'],
+                            'entry_time': position.get('entry_time'),
                             'pnl': pnl,
                             'winning_side': 'Sold'
                         })
