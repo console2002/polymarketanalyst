@@ -2,6 +2,7 @@ import requests
 import time
 import datetime
 import pytz
+from email.utils import parsedate_to_datetime
 from requests.adapters import HTTPAdapter
 from requests.exceptions import SSLError
 from urllib3.util.retry import Retry
@@ -59,14 +60,18 @@ def _get_polymarket_event(slug):
                 timeout=POLYMARKET_TIMEOUT,
             )
             response.raise_for_status()
-            return response.json(), None
+            date_header = response.headers.get("Date")
+            server_time = parsedate_to_datetime(date_header) if date_header else None
+            if server_time:
+                server_time = server_time.astimezone(datetime.timezone.utc)
+            return response.json(), None, server_time
         except SSLError:
             if attempt == 0:
                 time.sleep(1)
                 continue
-            return None, "Transient network/TLS issue while fetching Polymarket data"
+            return None, "Transient network/TLS issue while fetching Polymarket data", None
         except Exception as e:
-            return None, str(e)
+            return None, str(e), None
 
 def get_clob_price(token_id):
     try:
@@ -116,7 +121,7 @@ def _extract_market_times(market):
 def get_polymarket_data(slug):
     try:
         # 1. Get Event Details to find Token IDs
-        data, fetch_err = _get_polymarket_event(slug)
+        data, fetch_err, server_time = _get_polymarket_event(slug)
         if fetch_err:
             return None, fetch_err
         
@@ -155,7 +160,8 @@ def get_polymarket_data(slug):
         return {
             "prices": prices,
             "start_time": start_time,
-            "end_time": end_time
+            "end_time": end_time,
+            "polymarket_time_utc": server_time,
         }, None
     except Exception as e:
         return None, str(e)
@@ -196,6 +202,7 @@ def fetch_polymarket_data_struct():
             "slug": slug,
             "target_time_utc": target_time_utc,
             "expiration_time_utc": expiration_time_utc,
+            "polymarket_time_utc": poly_data.get("polymarket_time_utc"),
             "fetched_at": time.time(),
         }
         _LAST_GOOD_POLYMARKET_DATA = result
