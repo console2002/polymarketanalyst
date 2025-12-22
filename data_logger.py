@@ -17,7 +17,7 @@ def init_csv():
         print(f"Created {DATA_FILE}")
 
 def log_data():
-    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    timestamp = datetime.datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M:%S')
     
     fetched_data, err = fetch_polymarket_data_struct()
     
