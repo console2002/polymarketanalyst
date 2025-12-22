@@ -2,11 +2,71 @@ import requests
 import time
 import datetime
 import pytz
+from requests.adapters import HTTPAdapter
+from requests.exceptions import SSLError
+from urllib3.util.retry import Retry
 from get_current_markets import get_current_market_urls
 
 # Configuration
 POLYMARKET_API_URL = "https://gamma-api.polymarket.com/events"
 CLOB_API_URL = "https://clob.polymarket.com/book"
+POLYMARKET_TIMEOUT = (3, 10)
+POLYMARKET_RATE_LIMIT_SECONDS = 5
+_POLYMARKET_SESSION = None
+_LAST_POLYMARKET_CALL_AT = None
+_LAST_GOOD_POLYMARKET_DATA = None
+
+
+def _get_polymarket_session():
+    global _POLYMARKET_SESSION
+    if _POLYMARKET_SESSION is None:
+        session = requests.Session()
+        retry = Retry(
+            total=3,
+            connect=3,
+            read=3,
+            status=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _POLYMARKET_SESSION = session
+    return _POLYMARKET_SESSION
+
+
+def _rate_limit_polymarket_calls():
+    global _LAST_POLYMARKET_CALL_AT
+    now = time.monotonic()
+    if _LAST_POLYMARKET_CALL_AT is not None:
+        elapsed = now - _LAST_POLYMARKET_CALL_AT
+        if elapsed < POLYMARKET_RATE_LIMIT_SECONDS:
+            time.sleep(POLYMARKET_RATE_LIMIT_SECONDS - elapsed)
+    _LAST_POLYMARKET_CALL_AT = time.monotonic()
+
+
+def _get_polymarket_event(slug):
+    session = _get_polymarket_session()
+    _rate_limit_polymarket_calls()
+    for attempt in range(2):
+        try:
+            response = session.get(
+                POLYMARKET_API_URL,
+                params={"slug": slug},
+                timeout=POLYMARKET_TIMEOUT,
+            )
+            response.raise_for_status()
+            return response.json(), None
+        except SSLError:
+            if attempt == 0:
+                time.sleep(1)
+                continue
+            return None, "Transient network/TLS issue while fetching Polymarket data"
+        except Exception as e:
+            return None, str(e)
 
 def get_clob_price(token_id):
     try:
@@ -56,9 +116,9 @@ def _extract_market_times(market):
 def get_polymarket_data(slug):
     try:
         # 1. Get Event Details to find Token IDs
-        response = requests.get(POLYMARKET_API_URL, params={"slug": slug})
-        response.raise_for_status()
-        data = response.json()
+        data, fetch_err = _get_polymarket_event(slug)
+        if fetch_err:
+            return None, fetch_err
         
         if not data:
             return None, "Event not found"
@@ -106,6 +166,7 @@ def fetch_polymarket_data_struct():
     """
     Fetches current Polymarket data and returns a structured dictionary.
     """
+    global _LAST_GOOD_POLYMARKET_DATA
     try:
         # Get current market info
         market_info = get_current_market_urls()
@@ -120,17 +181,25 @@ def fetch_polymarket_data_struct():
         poly_data, poly_err = get_polymarket_data(slug)
         
         if poly_err:
+            if _LAST_GOOD_POLYMARKET_DATA:
+                cached = dict(_LAST_GOOD_POLYMARKET_DATA)
+                cached["is_cached"] = True
+                cached["cache_age_seconds"] = time.time() - cached.get("fetched_at", time.time())
+                return cached, None
             return None, f"Polymarket Error: {poly_err}"
             
         target_time_utc = poly_data.get("start_time") or target_time_utc
         expiration_time_utc = poly_data.get("end_time") or expiration_time_utc
 
-        return {
+        result = {
             "prices": poly_data.get("prices", {}), # {'Up': 0.xx, 'Down': 0.xx}
             "slug": slug,
             "target_time_utc": target_time_utc,
-            "expiration_time_utc": expiration_time_utc
-        }, None        
+            "expiration_time_utc": expiration_time_utc,
+            "fetched_at": time.time(),
+        }
+        _LAST_GOOD_POLYMARKET_DATA = result
+        return result, None        
     except Exception as e:
         return None, str(e)
 
