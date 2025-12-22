@@ -12,7 +12,7 @@ from get_current_markets import get_current_market_urls
 POLYMARKET_API_URL = "https://gamma-api.polymarket.com/events"
 CLOB_API_URL = "https://clob.polymarket.com/book"
 POLYMARKET_TIMEOUT = (3, 10)
-POLYMARKET_RATE_LIMIT_SECONDS = 5
+POLYMARKET_RATE_LIMIT_SECONDS = 1
 _POLYMARKET_SESSION = None
 _LAST_POLYMARKET_CALL_AT = None
 _LAST_GOOD_POLYMARKET_DATA = None

@@ -6,7 +6,7 @@ import pytz
 from fetch_current_polymarket import fetch_polymarket_data_struct
 
 DATA_FILE = "market_data.csv"
-LOOGING_INTERVAL_SECONDS = 1
+LOOGING_INTERVAL_SECONDS = 3
 TIMEZONE_ET = pytz.timezone("US/Eastern")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 
