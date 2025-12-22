@@ -3,6 +3,8 @@ import datetime
 import os
 
 DATA_FILE = "market_data.csv"
+TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
+TIMEZONE_ET = "US/Eastern"
 
 # Global Configuration Variables
 INITIAL_CAPITAL = 1000.0
@@ -67,9 +69,21 @@ class Backtester:
 
         self.market_data = pd.read_csv(file_path)
 
-        self.market_data['Timestamp'] = pd.to_datetime(self.market_data['Timestamp']).dt.tz_localize('UTC').dt.tz_convert('UTC')
-        self.market_data['TargetTime'] = pd.to_datetime(self.market_data['TargetTime']).dt.tz_localize('UTC').dt.tz_convert('UTC')
-        self.market_data['Expiration'] = pd.to_datetime(self.market_data['Expiration']).dt.tz_localize('UTC').dt.tz_convert('UTC')
+        self.market_data['Timestamp'] = (
+            pd.to_datetime(self.market_data['Timestamp'], format=TIME_FORMAT)
+            .dt.tz_localize(TIMEZONE_ET)
+            .dt.tz_convert('UTC')
+        )
+        self.market_data['TargetTime'] = (
+            pd.to_datetime(self.market_data['TargetTime'], format=TIME_FORMAT)
+            .dt.tz_localize(TIMEZONE_ET)
+            .dt.tz_convert('UTC')
+        )
+        self.market_data['Expiration'] = (
+            pd.to_datetime(self.market_data['Expiration'], format=TIME_FORMAT)
+            .dt.tz_localize(TIMEZONE_ET)
+            .dt.tz_convert('UTC')
+        )
 
         self.market_data.sort_values(by='Timestamp', inplace=True)
 

@@ -11,6 +11,7 @@ import datetime
 # Get the directory of the current script
 SCRIPT_DIR = os.path.dirname(__file__)
 DATA_FILE = os.path.join(SCRIPT_DIR, "market_data.csv")
+TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 
 
 st.set_page_config(page_title="Polymarket BTC Monitor", layout="wide")
@@ -20,7 +21,7 @@ st.title("Polymarket 15m BTC Monitor")
 def load_data():
     try:
         df = pd.read_csv(DATA_FILE)
-        df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+        df['Timestamp'] = pd.to_datetime(df['Timestamp'], format=TIME_FORMAT)
         return df
     except FileNotFoundError:
         return None

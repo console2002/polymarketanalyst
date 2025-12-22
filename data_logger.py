@@ -7,6 +7,16 @@ from fetch_current_polymarket import fetch_polymarket_data_struct
 
 DATA_FILE = "market_data.csv"
 LOOGING_INTERVAL_SECONDS = 1
+TIMEZONE_ET = pytz.timezone("US/Eastern")
+TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
+
+
+def _format_et_timestamp(value):
+    if not value:
+        return ""
+    if value.tzinfo is None:
+        value = pytz.utc.localize(value)
+    return value.astimezone(TIMEZONE_ET).strftime(TIME_FORMAT)
 
 
 def init_csv():
@@ -22,7 +32,7 @@ def log_data():
     timestamp_dt = fetched_data.get("polymarket_time_utc") if fetched_data else None
     if not timestamp_dt:
         timestamp_dt = datetime.datetime.now(pytz.utc)
-    timestamp = timestamp_dt.strftime('%Y-%m-%d %H:%M:%S')
+    timestamp = _format_et_timestamp(timestamp_dt)
     
     # Check if data is complete
     data = None
@@ -38,8 +48,8 @@ def log_data():
     target_time = data.get('target_time_utc', '')
     expiration = data.get('expiration_time_utc', '')
 
-    target_time_str = target_time.strftime('%Y-%m-%d %H:%M:%S') if target_time else ''
-    expiration_str = expiration.strftime('%Y-%m-%d %H:%M:%S') if expiration else ''
+    target_time_str = _format_et_timestamp(target_time)
+    expiration_str = _format_et_timestamp(expiration)
     up_price = data['prices'].get('Up', 0.0)
     down_price = data['prices'].get('Down', 0.0)
     
