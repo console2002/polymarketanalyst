@@ -12,7 +12,8 @@ class EightyTwentyStrategy:
         self.MINUTES_AFTER_OPEN = 5
         self.ENTRY_THRESHOLD = 0.60
         self.EXIT_THRESHOLD = 0.80
-        self.MAX_TRADE_SIZE = 500
+        self.HOLD_TO_CLOSE_THRESHOLD = 0.79
+        self.MAX_TRADE_SIZE = 50
 
     def decide_entry(self, market_data_point, market_open_time, current_capital):
         entry_time = market_open_time + datetime.timedelta(minutes=self.MINUTES_AFTER_OPEN)
@@ -44,6 +45,8 @@ class EightyTwentyStrategy:
         return (side, quantity, price)
 
     def should_sell(self, market_data_point, position):
+        if position.get('hold_to_close'):
+            return False
         price = market_data_point['UpPrice'] if position['side'] == 'Up' else market_data_point['DownPrice']
         return price >= self.EXIT_THRESHOLD
 
@@ -112,9 +115,11 @@ class Backtester:
             'Side': position['side'],
             'Quantity': position['quantity'],
             'EntryPrice': position['entry_price'],
+            'EntryTime': position.get('entry_time'),
             'Value': position['quantity'] * position['entry_price'],
             'PnL': pnl,
-            'WinningSide': winning_side
+            'WinningSide': winning_side,
+            'ExitTime': current_timestamp
         })
 
         return {
@@ -161,7 +166,7 @@ class Backtester:
     def run_strategy(self, strategy_instance):
         current_timestamp = None
         unique_timestamps = self.market_data['Timestamp'].unique()
-        traded_markets = set()
+        traded_windows = set()
 
         for ts_np in unique_timestamps:
             current_timestamp = pd.to_datetime(ts_np)
@@ -184,7 +189,9 @@ class Backtester:
                             'Side': position['side'],
                             'Quantity': position['quantity'],
                             'EntryPrice': position['entry_price'],
+                            'EntryTime': position.get('entry_time'),
                             'ExitPrice': sell_price,
+                            'ExitTime': current_timestamp,
                             'Value': proceeds,
                             'PnL': pnl,
                             'WinningSide': 'Sold'
@@ -199,21 +206,27 @@ class Backtester:
                         })
                         del self.open_positions[market_id_tuple]
 
-                if market_id_tuple in traded_markets or market_id_tuple in self.open_positions:
+                market_open_time = self.market_open_times[market_id_tuple]
+                market_window_start = market_open_time.floor('15min')
+
+                if market_window_start in traded_windows or market_id_tuple in self.open_positions:
                     continue
 
-                trade_decision = strategy_instance.decide_entry(row, self.market_open_times[market_id_tuple], self.capital)
+                trade_decision = strategy_instance.decide_entry(row, market_open_time, self.capital)
                 if trade_decision:
                     side, quantity, entry_price = trade_decision
                     cost = quantity * entry_price
                     if self.capital >= cost:
+                        hold_to_close = entry_price >= strategy_instance.HOLD_TO_CLOSE_THRESHOLD
                         self.capital -= cost
                         self.open_positions[market_id_tuple] = {
                             'market_id': market_id_tuple,
                             'side': side,
                             'quantity': quantity,
                             'entry_price': entry_price,
-                            'expiration': row['Expiration']
+                            'entry_time': current_timestamp,
+                            'expiration': row['Expiration'],
+                            'hold_to_close': hold_to_close
                         }
                         self.transactions.append({
                             'Timestamp': current_timestamp,
@@ -222,10 +235,11 @@ class Backtester:
                             'Side': side,
                             'Quantity': quantity,
                             'EntryPrice': entry_price,
+                            'EntryTime': current_timestamp,
                             'Value': cost,
                             'PnL': -cost
                         })
-                        traded_markets.add(market_id_tuple)
+                        traded_windows.add(market_window_start)
 
             positions_to_resolve = []
             for market_id_tuple, position in list(self.open_positions.items()):
