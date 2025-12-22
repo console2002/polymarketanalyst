@@ -4,6 +4,8 @@ import os
 from collections import deque
 
 DATA_FILE = "market_data.csv"
+TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
+TIMEZONE_ET = "US/Eastern"
 
 # Global Configuration Variables
 INITIAL_CAPITAL = 1000.0
@@ -153,11 +155,21 @@ class Backtester:
         self.market_data = pd.read_csv(file_path)
         
         # Convert relevant columns to datetime objects
-        self.market_data['Timestamp'] = pd.to_datetime(self.market_data['Timestamp']).dt.tz_localize('UTC').dt.tz_convert('UTC')
-        # TargetTime and Expiration are now output as naive strings by data_logger.py,
-        # but they represent UTC times, so localize them to UTC after parsing.
-        self.market_data['TargetTime'] = pd.to_datetime(self.market_data['TargetTime']).dt.tz_localize('UTC').dt.tz_convert('UTC')
-        self.market_data['Expiration'] = pd.to_datetime(self.market_data['Expiration']).dt.tz_localize('UTC').dt.tz_convert('UTC')
+        self.market_data['Timestamp'] = (
+            pd.to_datetime(self.market_data['Timestamp'], format=TIME_FORMAT)
+            .dt.tz_localize(TIMEZONE_ET)
+            .dt.tz_convert('UTC')
+        )
+        self.market_data['TargetTime'] = (
+            pd.to_datetime(self.market_data['TargetTime'], format=TIME_FORMAT)
+            .dt.tz_localize(TIMEZONE_ET)
+            .dt.tz_convert('UTC')
+        )
+        self.market_data['Expiration'] = (
+            pd.to_datetime(self.market_data['Expiration'], format=TIME_FORMAT)
+            .dt.tz_localize(TIMEZONE_ET)
+            .dt.tz_convert('UTC')
+        )
         
         # Sort data by timestamp to ensure chronological processing
         self.market_data.sort_values(by='Timestamp', inplace=True)
