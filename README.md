@@ -53,19 +53,25 @@ Upon market resolution, the backtester now provides a single, consolidated summa
 
 #### How to Run Data fetcher and Dashboard
 
-**Step 1: Start the Data Logger**
+**Step 0: Run setup**
 Open a terminal and run:
-```bash
-python data_logger.py
+```bat
+setup.bat
 ```
-This will continuously fetch market data every 10 seconds and save it to `market_data.csv`.
 
-**Step 2: Launch the Dashboard**
-Open a **new** terminal and run:
-```bash
-python -m streamlit run dashboard.py
+When setup finishes, use the exact commands it prints:
 ```
-The dashboard will open in your browser at `http://localhost:8501`.
+==============================================================
+Setup complete.
+==============================================================
+Next steps:
+  1) Run the data logger:
+       .\.venv\Scripts\python.exe data_logger.py
+  2) In a new terminal, start the dashboard:
+       .\.venv\Scripts\python.exe -m streamlit run dashboard.py
+```
+
+This will continuously fetch market data every 10 seconds and save it to `market_data.csv`. The dashboard will open in your browser at `http://localhost:8501`.
 
 #### How to Run backtester
 
