@@ -16,6 +16,8 @@ class EightyTwentyStrategy:
         self.EXIT_THRESHOLD = 0.80
         self.HOLD_TO_CLOSE_THRESHOLD = 0.79
         self.MAX_TRADE_SIZE = 50
+        self.USE_RISK_PERCENT = True
+        self.RISK_PERCENT = 0.01
         self.USE_LOTS = True
         self.FIXED_VALUE = 10
 
@@ -41,7 +43,11 @@ class EightyTwentyStrategy:
             price = up_price if eligible_up else down_price
 
         max_qty_by_capital = int(current_capital / price) if price > 0 else 0
-        if self.USE_LOTS:
+        if self.USE_RISK_PERCENT:
+            risk_amount = current_capital * self.RISK_PERCENT
+            target_qty = int(risk_amount / price) if price > 0 else 0
+            quantity = min(target_qty, max_qty_by_capital)
+        elif self.USE_LOTS:
             quantity = min(self.MAX_TRADE_SIZE, max_qty_by_capital)
         else:
             target_qty = int(self.FIXED_VALUE / price) if price > 0 else 0
@@ -317,6 +323,8 @@ class Backtester:
 
         winning_trades_count = sum(1 for t in closed_trades if t['PnL'] > 0)
         losing_trades_count = sum(1 for t in closed_trades if t['PnL'] <= 0)
+        total_trades_count = len(buy_trades)
+        strike_rate = (winning_trades_count / total_trades_count * 100) if total_trades_count > 0 else 0.0
 
         print(f"Number of Buy Trades: {len(buy_trades)}")
         print(f"Number of Markets Traded: {num_markets_played}")
@@ -325,6 +333,7 @@ class Backtester:
         print(f"Total Down Shares: {total_down_shares}")
         print(f"Number of Winning Trades: {winning_trades_count}")
         print(f"Number of Losing Trades: {losing_trades_count}")
+        print(f"Strike Rate: {strike_rate:.2f}%")
 
 if __name__ == "__main__":
     backtester = Backtester(initial_capital=INITIAL_CAPITAL)
