@@ -316,13 +316,58 @@ class Backtester:
         
         num_markets_won = sum(1 for pnl in market_pnl.values() if pnl > 0)
 
-        winning_trades_count = 0
-        losing_trades_count = 0
-        for t in resolution_trades:
-            if t['PnL'] > 0:
-                winning_trades_count += 1
+        winning_trades = [t for t in resolution_trades if t['PnL'] > 0]
+        losing_trades = [t for t in resolution_trades if t['PnL'] <= 0]
+        winning_trades_count = len(winning_trades)
+        losing_trades_count = len(losing_trades)
+
+        avg_win = sum(t['PnL'] for t in winning_trades) / winning_trades_count if winning_trades_count > 0 else 0.0
+        avg_loss = (sum(abs(t['PnL']) for t in losing_trades) / losing_trades_count) if losing_trades_count > 0 else 0.0
+
+        total_trades_count = len(resolution_trades)
+        win_rate = (winning_trades_count / total_trades_count) if total_trades_count > 0 else 0.0
+        loss_rate = (losing_trades_count / total_trades_count) if total_trades_count > 0 else 0.0
+
+        payoff_ratio = (avg_win / avg_loss) if avg_loss > 0 else 0.0
+        expectancy = (win_rate * avg_win) - (loss_rate * avg_loss)
+        profit_factor = (
+            sum(t['PnL'] for t in winning_trades) / sum(abs(t['PnL']) for t in losing_trades)
+            if losing_trades_count > 0
+            else 0.0
+        )
+        break_even_win_rate = (avg_loss / (avg_loss + avg_win)) if (avg_loss + avg_win) > 0 else 0.0
+
+        sorted_trades = sorted(resolution_trades, key=lambda t: t['Timestamp'])
+        current_loss_streak = 0
+        max_consecutive_losses = 0
+        for trade in sorted_trades:
+            if trade['PnL'] <= 0:
+                current_loss_streak += 1
+                max_consecutive_losses = max(max_consecutive_losses, current_loss_streak)
             else:
-                losing_trades_count += 1
+                current_loss_streak = 0
+
+        equity = self.initial_capital
+        equity_curve = []
+        for trade in sorted(self.transactions, key=lambda t: t['Timestamp']):
+            if trade['Type'] == 'Buy':
+                equity -= trade['Value']
+            elif trade['Type'] == 'Resolution':
+                payout = trade['PnL'] + trade['Value']
+                if payout > 0:
+                    equity += payout
+            equity_curve.append(equity)
+
+        max_drawdown_pct = 0.0
+        if equity_curve:
+            peak = equity_curve[0]
+            for value in equity_curve:
+                if value > peak:
+                    peak = value
+                if peak > 0:
+                    drawdown = (peak - value) / peak
+                    max_drawdown_pct = max(max_drawdown_pct, drawdown)
+        max_drawdown_pct *= 100
         
         print(f"Number of Buy Trades: {len(buy_trades)}")
         print(f"Number of Markets Traded: {num_markets_played}")
@@ -331,6 +376,14 @@ class Backtester:
         print(f"Total Down Shares: {total_down_shares}")
         print(f"Number of Winning Trades: {winning_trades_count}")
         print(f"Number of Losing Trades: {losing_trades_count}")
+        print(f"Max Drawdown: {max_drawdown_pct:.2f}%")
+        print(f"Avg Win (USD): ${avg_win:.2f}")
+        print(f"Avg Loss (USD): ${avg_loss:.2f}")
+        print(f"Max Consecutive Losses: {max_consecutive_losses}")
+        print(f"Payoff Ratio: {payoff_ratio:.2f}")
+        print(f"Expectancy (USD): ${expectancy:.2f}")
+        print(f"Profit Factor: {profit_factor:.2f}")
+        print(f"Break-even Win Rate: {break_even_win_rate:.2%}")
 
 if __name__ == "__main__":
     backtester = Backtester(initial_capital=INITIAL_CAPITAL)
