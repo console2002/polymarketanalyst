@@ -2,6 +2,15 @@ import pandas as pd
 import datetime
 import os
 
+from backtest_metrics import (
+    compute_r_metrics,
+    compute_ulcer_index_pct,
+    market_outcome_stats,
+    market_pnls_by_close,
+    pnl_distribution_stats,
+    wins_between_losses_stats,
+)
+
 DATA_FILE = "market_data.csv"
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 TIMEZONE_ET = "US/Eastern"
@@ -74,6 +83,7 @@ class Backtester:
         self.market_history = {}
         self.market_open_times = {}
         self.pending_market_summaries = {}
+        self.risk_percent = None
 
     def load_data(self, file_path):
         if not os.path.exists(file_path):
@@ -197,6 +207,7 @@ class Backtester:
         print(f"----Total PnL for market: ${total_market_pnl:.2f}----")
 
     def run_strategy(self, strategy_instance):
+        self.risk_percent = getattr(strategy_instance, "RISK_PERCENT", None)
         current_timestamp = None
         unique_timestamps = self.market_data['Timestamp'].unique()
         traded_windows = set()
@@ -403,6 +414,27 @@ class Backtester:
         worst_5_trade = worst_rolling_sum(pnl_series, 5)
         worst_10_trade = worst_rolling_sum(pnl_series, 10)
 
+        market_pnls = market_pnls_by_close(closed_trades, market_pnl)
+        total_return_pct = (
+            (self.capital / self.initial_capital - 1.0) * 100.0 if self.initial_capital > 0 else 0.0
+        )
+        avg_return_per_market_pct = (
+            total_return_pct / num_markets_played if num_markets_played > 0 else 0.0
+        )
+        market_stats = market_outcome_stats(market_pnls)
+        r_metrics = compute_r_metrics(
+            self.initial_capital,
+            self.risk_percent,
+            market_stats["avg_win_usd"],
+            market_stats["avg_loss_usd"],
+            market_stats["worst_loss_usd"],
+            market_stats["expectancy_usd"],
+        )
+        recovery_factor = total_return_pct / max_drawdown_pct if max_drawdown_pct > 0 else 0.0
+        ulcer_index_pct = compute_ulcer_index_pct(self.initial_capital, market_pnls)
+        wins_between = wins_between_losses_stats(market_pnls)
+        pnl_stats = pnl_distribution_stats(market_pnls)
+
         print(f"Number of Buy Trades: {len(buy_trades)}")
         print(f"Number of Markets Traded: {num_markets_played}")
         print(f"Number of Markets Won: {num_markets_won}")
@@ -424,6 +456,22 @@ class Backtester:
         print(f"Expectancy (USD): ${expectancy:.2f}")
         print(f"Profit Factor: {profit_factor:.2f}")
         print(f"Break-even Win Rate: {break_even_win_rate:.2%}")
+        print(f"Total Return (%): {total_return_pct:.2f}%")
+        print(f"Avg Return per Market (%): {avg_return_per_market_pct:.2f}%")
+        print(f"Risk per Market (%): {r_metrics['risk_per_market_pct']:.2f}%")
+        print(f"R (USD): ${r_metrics['r_usd']:.2f}")
+        print(f"Avg Win (R): {r_metrics['avg_win_r']:.3f}")
+        print(f"Avg Loss (R): {r_metrics['avg_loss_r']:.3f}")
+        print(f"Worst Loss (R): {r_metrics['worst_loss_r']:.3f}")
+        print(f"Expectancy (R): {r_metrics['expectancy_r']:.3f}")
+        print(f"Recovery Factor: {recovery_factor:.2f}")
+        print(f"Ulcer Index (%): {ulcer_index_pct:.2f}%")
+        print(f"Wins Between Losses Count: {wins_between['count']}")
+        print(f"Wins Between Losses Min: {wins_between['min']}")
+        print(f"Wins Between Losses Median: {wins_between['median']:.2f}")
+        print(f"Wins Between Losses P10: {wins_between['p10']:.2f}")
+        print(f"PnL Std Dev (USD): ${pnl_stats['pnl_std_usd']:.2f}")
+        print(f"Sharpe per Market: {pnl_stats['sharpe_per_market']:.2f}")
 
 if __name__ == "__main__":
     backtester = Backtester(initial_capital=INITIAL_CAPITAL)
