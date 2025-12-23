@@ -16,15 +16,10 @@ class EightyTwentyStrategy:
         self.EXIT_THRESHOLD = 0.80
         self.HOLD_TO_CLOSE_THRESHOLD = 0.79
         self.MAX_TRADE_SIZE = 50
-<<<<<<< Updated upstream
         self.USE_RISK_PERCENT = True
         self.RISK_PERCENT = 0.01
         self.USE_LOTS = True
         self.FIXED_VALUE = 10
-=======
-        self.USE_LOTS = False
-        self.FIXED_VALUE = 30
->>>>>>> Stashed changes
 
     def decide_entry(self, market_data_point, market_open_time, current_capital):
         entry_time = market_open_time + datetime.timedelta(minutes=self.MINUTES_AFTER_OPEN)
