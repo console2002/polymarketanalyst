@@ -16,6 +16,8 @@ class EightyTwentyStrategy:
         self.EXIT_THRESHOLD = 0.80
         self.HOLD_TO_CLOSE_THRESHOLD = 0.79
         self.MAX_TRADE_SIZE = 50
+        self.USE_LOTS = True
+        self.FIXED_VALUE = 10
 
     def decide_entry(self, market_data_point, market_open_time, current_capital):
         entry_time = market_open_time + datetime.timedelta(minutes=self.MINUTES_AFTER_OPEN)
@@ -39,7 +41,11 @@ class EightyTwentyStrategy:
             price = up_price if eligible_up else down_price
 
         max_qty_by_capital = int(current_capital / price) if price > 0 else 0
-        quantity = min(self.MAX_TRADE_SIZE, max_qty_by_capital)
+        if self.USE_LOTS:
+            quantity = min(self.MAX_TRADE_SIZE, max_qty_by_capital)
+        else:
+            target_qty = int(self.FIXED_VALUE / price) if price > 0 else 0
+            quantity = min(target_qty, max_qty_by_capital)
 
         if quantity <= 0:
             return None
