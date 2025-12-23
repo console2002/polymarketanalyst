@@ -27,21 +27,30 @@ def load_data():
         st.error(f"Error loading data: {e}")
         return None
 
-# Auto-refresh logic (Top of page)
-col_top1, col_top2 = st.columns([1, 4])
+# Top-row controls
+col_top1, col_top2, col_top3 = st.columns(3)
 with col_top1:
-    if st.button('Refresh Data', key='refresh_data_button'):
+    if st.button('Refresh Data', key='refresh_data_button', width="stretch"):
         st.rerun()
-with col_top2:
     auto_refresh = st.checkbox("Auto-refresh", value=True)
-
-# UI control for moving average window
-smoothing_window = st.selectbox(
-    "Derivative Smoothing Window (Moving Average)",
-    options=list(range(1, 31)),
-    index=0,
-    help="Set the window size for the moving average applied to the derivative to smooth out zig-zag. A value of 1 means no smoothing.",
-)
+with col_top2:
+    smoothing_window = st.selectbox(
+        "Derivative Smoothing Window (Moving Average)",
+        options=list(range(1, 31)),
+        index=0,
+        help="Set the window size for the moving average applied to the derivative to smooth out zig-zag. A value of 1 means no smoothing.",
+        width="stretch",
+    )
+with col_top3:
+    lookback_period = st.number_input(
+        "Lookback Period (Markets)",
+        min_value=1,
+        max_value=20,
+        value=4,
+        step=1,
+        help="Number of markets to display in the window, including the current one.",
+        width="stretch",
+    )
 
 df = load_data()
 
@@ -52,14 +61,6 @@ if df is not None and not df.empty:
     if 'window_offset' not in st.session_state:
         st.session_state.window_offset = 0
 
-    lookback_period = st.number_input(
-        "Lookback Period (Markets)",
-        min_value=1,
-        max_value=20,
-        value=4,
-        step=1,
-        help="Number of markets to display in the window, including the current one.",
-    )
     window_size = int(lookback_period)
     target_times = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
     total_markets = len(target_times)
@@ -159,11 +160,12 @@ if df is not None and not df.empty:
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        target_time = df_window['TargetTime_dt'].max()
+        target_time = df['TargetTime_dt'].max()
         if pd.isna(target_time):
             countdown_display = "N/A"
         else:
-            remaining_seconds = int((target_time - pd.Timestamp.now()).total_seconds())
+            latest_timestamp = df['Timestamp'].max()
+            remaining_seconds = int((target_time - latest_timestamp).total_seconds())
             remaining_seconds = max(0, remaining_seconds)
             minutes_left = remaining_seconds // 60
             seconds_left = remaining_seconds % 60
@@ -257,16 +259,19 @@ if df is not None and not df.empty:
                     showlegend=False,
                 )
             )
-            final_up = market_group['UpPrice'].iloc[-1]
-            final_down = market_group['DownPrice'].iloc[-1]
-            expected_final = final_up if expected_side == "up" else final_down
-            win = expected_final >= 0.99
+            final_up_values = market_group['UpPrice'].replace(0, np.nan).dropna()
+            final_down_values = market_group['DownPrice'].replace(0, np.nan).dropna()
+            if final_up_values.empty or final_down_values.empty:
+                continue
+            final_up = final_up_values.iloc[-1]
+            final_down = final_down_values.iloc[-1]
+            win = final_up >= 0.99 if expected_side == "up" else final_down >= 0.99
             fig.add_annotation(
                 x=market_group['Timestamp'].iloc[-1],
                 y=1.03,
                 text="Win" if win else "Lose",
                 showarrow=False,
-                font=dict(color="#00AA00" if win else "#FF0000", size=12),
+                font=dict(color="#00AA00" if win else "#FF0000", size=16),
                 row=1,
                 col=1,
             )
@@ -300,7 +305,7 @@ if df is not None and not df.empty:
     # Enable crosshair (spike lines) across both subplots
     fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
     
-    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+    st.plotly_chart(fig, width="stretch", config={'scrollZoom': True})
     
     st.caption(f"Last updated: {latest['Timestamp']}")
 
