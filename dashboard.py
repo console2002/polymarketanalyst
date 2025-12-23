@@ -16,8 +16,6 @@ TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 
 st.set_page_config(page_title="Polymarket BTC Monitor", layout="wide")
 
-st.title("Polymarket 15m BTC Monitor")
-
 def load_data():
     try:
         df = pd.read_csv(DATA_FILE)
@@ -38,7 +36,12 @@ with col_top2:
     auto_refresh = st.checkbox("Auto-refresh", value=True)
 
 # UI control for moving average window
-smoothing_window = st.slider("Derivative Smoothing Window (Moving Average)", min_value=1, max_value=30, value=1, help="Set the window size for the moving average applied to the derivative to smooth out zig-zag. A value of 1 means no smoothing.")
+smoothing_window = st.selectbox(
+    "Derivative Smoothing Window (Moving Average)",
+    options=list(range(1, 31)),
+    index=0,
+    help="Set the window size for the moving average applied to the derivative to smooth out zig-zag. A value of 1 means no smoothing.",
+)
 
 df = load_data()
 
@@ -49,7 +52,15 @@ if df is not None and not df.empty:
     if 'window_offset' not in st.session_state:
         st.session_state.window_offset = 0
 
-    window_size = 4
+    lookback_period = st.number_input(
+        "Lookback Period (Markets)",
+        min_value=1,
+        max_value=20,
+        value=4,
+        step=1,
+        help="Number of markets to display in the window, including the current one.",
+    )
+    window_size = int(lookback_period)
     target_times = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
     total_markets = len(target_times)
     max_offset = max(0, total_markets - window_size)
@@ -60,7 +71,25 @@ if df is not None and not df.empty:
     if pd.isna(jump_default):
         jump_default = df['Timestamp'].max()
 
-    col_nav1, col_nav2, col_nav3, col_nav4 = st.columns([1, 1, 1, 4])
+    header_col, jump_col = st.columns([3, 2])
+    with header_col:
+        st.title("Polymarket 15m BTC Monitor")
+    with jump_col:
+        jump_time = st.datetime_input(
+            "Jump to time",
+            value=jump_default,
+            help=f"Jump to the {window_size}-market window that includes this time.",
+        )
+        if st.button("Jump", key="window_jump_button") and total_markets:
+            eligible_times = [t for t in target_times if t and t <= jump_time]
+            if eligible_times:
+                target_index = target_times.index(eligible_times[-1])
+            else:
+                target_index = 0
+            st.session_state.window_offset = max(0, total_markets - (target_index + 1))
+            st.rerun()
+
+    col_nav1, col_nav2, col_nav3 = st.columns([1, 1, 1])
     with col_nav1:
         if st.button("Back", key="window_back_button", disabled=st.session_state.window_offset >= max_offset):
             st.session_state.window_offset = min(max_offset, st.session_state.window_offset + 1)
@@ -72,20 +101,6 @@ if df is not None and not df.empty:
     with col_nav3:
         if st.button("Latest", key="window_latest_button", disabled=st.session_state.window_offset == 0):
             st.session_state.window_offset = 0
-            st.rerun()
-    with col_nav4:
-        jump_time = st.datetime_input(
-            "Jump to time",
-            value=jump_default,
-            help="Jump to the 4-market window that includes this time.",
-        )
-        if st.button("Jump", key="window_jump_button") and total_markets:
-            eligible_times = [t for t in target_times if t and t <= jump_time]
-            if eligible_times:
-                target_index = target_times.index(eligible_times[-1])
-            else:
-                target_index = 0
-            st.session_state.window_offset = max(0, total_markets - (target_index + 1))
             st.rerun()
 
     if total_markets:
@@ -144,7 +159,7 @@ if df is not None and not df.empty:
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        target_time = latest['TargetTime_dt']
+        target_time = df_window['TargetTime_dt'].max()
         if pd.isna(target_time):
             countdown_display = "N/A"
         else:
@@ -155,9 +170,9 @@ if df is not None and not df.empty:
             countdown_display = f"{minutes_left:02d}:{seconds_left:02d}"
         st.metric("Minutes Left (MM:SS)", countdown_display)
     with col3:
-        st.metric("Yes (Up) Cost", f"${latest['UpPrice']:.3f}")
+        st.metric("Yes (Up) Cost", f"${latest['UpPrice']:.2f}")
     with col4:
-        st.metric("No (Down) Cost", f"${latest['DownPrice']:.3f}")
+        st.metric("No (Down) Cost", f"${latest['DownPrice']:.2f}")
 
 
     
@@ -224,12 +239,12 @@ if df is not None and not df.empty:
         down_cross_index = find_crossing(eligible['DownPrice'])
         candidates = []
         if up_cross_index is not None:
-            candidates.append((eligible.loc[up_cross_index, 'Timestamp'], eligible.loc[up_cross_index, 'UpPrice']))
+            candidates.append(("up", eligible.loc[up_cross_index, 'Timestamp'], eligible.loc[up_cross_index, 'UpPrice']))
         if down_cross_index is not None:
-            candidates.append((eligible.loc[down_cross_index, 'Timestamp'], eligible.loc[down_cross_index, 'DownPrice']))
+            candidates.append(("down", eligible.loc[down_cross_index, 'Timestamp'], eligible.loc[down_cross_index, 'DownPrice']))
 
         if candidates:
-            cross_time, cross_value = min(candidates, key=lambda item: item[0])
+            expected_side, cross_time, cross_value = min(candidates, key=lambda item: item[1])
             expected_winner_traces.append(
                 go.Scatter(
                     x=[cross_time],
@@ -241,6 +256,19 @@ if df is not None and not df.empty:
                     textfont=dict(size=10, color='#1E90FF'),
                     showlegend=False,
                 )
+            )
+            final_up = market_group['UpPrice'].iloc[-1]
+            final_down = market_group['DownPrice'].iloc[-1]
+            expected_final = final_up if expected_side == "up" else final_down
+            win = expected_final >= 0.99
+            fig.add_annotation(
+                x=market_group['Timestamp'].iloc[-1],
+                y=1.03,
+                text="Win" if win else "Lose",
+                showarrow=False,
+                font=dict(color="#00AA00" if win else "#FF0000", size=12),
+                row=1,
+                col=1,
             )
 
     for trace in expected_winner_traces:
@@ -259,7 +287,7 @@ if df is not None and not df.empty:
         height=800, # Increased height for two subplots
         hovermode="x unified",
         xaxis_title="Time",
-        yaxis=dict(title="Probability", range=[0, 1]), # Title for first y-axis
+        yaxis=dict(title="Probability", range=[0, 1.05]), # Title for first y-axis
         yaxis2=dict(title="Rate of Change"), # Title for second y-axis
         xaxis=dict(rangeslider=dict(visible=False), type="date"),
         xaxis2=dict(rangeslider=dict(visible=True), type="date")
@@ -272,13 +300,12 @@ if df is not None and not df.empty:
     # Enable crosshair (spike lines) across both subplots
     fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
     
-    left_pad, chart_col, right_pad = st.columns([1, 6, 1])
-    with chart_col:
-        st.plotly_chart(fig, width=1000, config={'scrollZoom': True})
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
     
     st.caption(f"Last updated: {latest['Timestamp']}")
 
 else:
+    st.title("Polymarket 15m BTC Monitor")
     st.warning("No data found yet. Please ensure data_logger.py is running.")
     
 # --- Auto-refresh logic (periodic check) ---
