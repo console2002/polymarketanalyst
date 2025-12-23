@@ -214,6 +214,7 @@ def fetch_polymarket_data_struct():
 
         result = {
             "prices": poly_data.get("prices", {}), # {'Up': 0.xx, 'Down': 0.xx}
+            "volumes": poly_data.get("volumes", {}),
             "slug": slug,
             "target_time_utc": target_time_utc,
             "expiration_time_utc": expiration_time_utc,
