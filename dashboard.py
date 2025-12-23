@@ -195,6 +195,57 @@ if df is not None and not df.empty:
     # Derivative Chart (Row 2)
     fig.add_trace(go.Scatter(x=df_chart['Timestamp'], y=df_chart['UpPrice_Derivative'], name="Up Price Derivative", line=dict(color='#FFA500', width=2), mode='lines+markers'), row=2, col=1)
 
+    five_min_threshold = pd.Timedelta(minutes=5)
+    probability_threshold = 0.6
+    expected_winner_traces = []
+
+    for _, market_group in df_window.groupby('TargetTime', sort=False):
+        market_group = market_group.sort_values('Timestamp')
+        if market_group.empty:
+            continue
+        market_open = market_group['Timestamp'].iloc[0]
+        five_min_mark = market_open + five_min_threshold
+
+        fig.add_vline(x=five_min_mark, line_width=1, line_dash="solid", line_color="rgba(200, 200, 200, 0.4)", row=1, col=1)
+        fig.add_vline(x=five_min_mark, line_width=1, line_dash="solid", line_color="rgba(200, 200, 200, 0.4)", row=2, col=1)
+
+        eligible = market_group[market_group['Timestamp'] >= five_min_mark].copy()
+        if eligible.empty:
+            continue
+
+        def find_crossing(series):
+            above = series >= probability_threshold
+            crossings = above & ~above.shift(fill_value=False)
+            if crossings.any():
+                return crossings[crossings].index[0]
+            return None
+
+        up_cross_index = find_crossing(eligible['UpPrice'])
+        down_cross_index = find_crossing(eligible['DownPrice'])
+        candidates = []
+        if up_cross_index is not None:
+            candidates.append((eligible.loc[up_cross_index, 'Timestamp'], eligible.loc[up_cross_index, 'UpPrice']))
+        if down_cross_index is not None:
+            candidates.append((eligible.loc[down_cross_index, 'Timestamp'], eligible.loc[down_cross_index, 'DownPrice']))
+
+        if candidates:
+            cross_time, cross_value = min(candidates, key=lambda item: item[0])
+            expected_winner_traces.append(
+                go.Scatter(
+                    x=[cross_time],
+                    y=[cross_value],
+                    mode='markers+text',
+                    marker=dict(color='#1E90FF', size=9),
+                    text=["expected winner"],
+                    textposition='top center',
+                    textfont=dict(size=10, color='#1E90FF'),
+                    showlegend=False,
+                )
+            )
+
+    for trace in expected_winner_traces:
+        fig.add_trace(trace, row=1, col=1)
+
     # Add vertical lines for market transitions to both plots
     # Identify where TargetTime changes
     transitions = df_window.loc[df_window['TargetTime'].shift() != df_window['TargetTime'], 'Timestamp'].iloc[1:]
@@ -210,7 +261,8 @@ if df is not None and not df.empty:
         xaxis_title="Time",
         yaxis=dict(title="Probability", range=[0, 1]), # Title for first y-axis
         yaxis2=dict(title="Rate of Change"), # Title for second y-axis
-        xaxis=dict(rangeslider=dict(visible=True), type="date") # Base x-axis properties without range
+        xaxis=dict(rangeslider=dict(visible=False), type="date"),
+        xaxis2=dict(rangeslider=dict(visible=True), type="date")
     )
     # Explicitly set range for xaxis1 and xaxis2 (main and shared x-axes)
     if current_range:
@@ -220,7 +272,9 @@ if df is not None and not df.empty:
     # Enable crosshair (spike lines) across both subplots
     fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
     
-    st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
+    left_pad, chart_col, right_pad = st.columns([1, 6, 1])
+    with chart_col:
+        st.plotly_chart(fig, width=1000, config={'scrollZoom': True})
     
     st.caption(f"Last updated: {latest['Timestamp']}")
 
