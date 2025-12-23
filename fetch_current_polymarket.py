@@ -73,7 +73,7 @@ def _get_polymarket_event(slug):
         except Exception as e:
             return None, str(e), None
 
-def get_clob_price(token_id):
+def get_clob_best_quotes(token_id):
     try:
         response = requests.get(CLOB_API_URL, params={"token_id": token_id})
         response.raise_for_status()
@@ -84,17 +84,28 @@ def get_clob_price(token_id):
         asks = data.get('asks', [])
         
         best_bid = 0.0
+        best_bid_size = 0.0
         best_ask = 0.0
+        best_ask_size = 0.0
         
         if bids:
             # Bids: We want the HIGHEST price someone is willing to pay
-            best_bid = max(float(b['price']) for b in bids)
+            best_bid_quote = max(bids, key=lambda b: float(b["price"]))
+            best_bid = float(best_bid_quote["price"])
+            best_bid_size = float(best_bid_quote.get("size", 0.0))
             
         if asks:
             # Asks: We want the LOWEST price someone is willing to sell for
-            best_ask = min(float(a['price']) for a in asks)
+            best_ask_quote = min(asks, key=lambda a: float(a["price"]))
+            best_ask = float(best_ask_quote["price"])
+            best_ask_size = float(best_ask_quote.get("size", 0.0))
             
-        return best_ask if best_ask > 0 else 0.0 # Return Ask as the "Buy" price
+        return {
+            "best_bid": best_bid,
+            "best_bid_size": best_bid_size,
+            "best_ask": best_ask,
+            "best_ask_size": best_ask_size,
+        }
     except Exception as e:
         return None
 
@@ -145,20 +156,24 @@ def get_polymarket_data(slug):
             
         # 2. Fetch Price for each Token from CLOB
         prices = {}
+        volumes = {}
         # Assuming order is [Up, Down] or matches outcomes
         # Usually outcomes are ["Up", "Down"] and clobTokenIds correspond.
         
         for outcome, token_id in zip(outcomes, clob_token_ids):
-            price = get_clob_price(token_id)
-            if price is not None:
-                prices[outcome] = price
+            quote = get_clob_best_quotes(token_id)
+            if quote is not None:
+                prices[outcome] = quote["best_ask"] if quote["best_ask"] > 0 else 0.0
+                volumes[outcome] = quote["best_ask_size"]
             else:
                 prices[outcome] = 0.0
+                volumes[outcome] = 0.0
             
         start_time, end_time = _extract_market_times(market)
 
         return {
             "prices": prices,
+            "volumes": volumes,
             "start_time": start_time,
             "end_time": end_time,
             "polymarket_time_utc": server_time,
@@ -199,6 +214,7 @@ def fetch_polymarket_data_struct():
 
         result = {
             "prices": poly_data.get("prices", {}), # {'Up': 0.xx, 'Down': 0.xx}
+            "volumes": poly_data.get("volumes", {}),
             "slug": slug,
             "target_time_utc": target_time_utc,
             "expiration_time_utc": expiration_time_utc,

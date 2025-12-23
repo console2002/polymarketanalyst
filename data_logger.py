@@ -23,7 +23,7 @@ def init_csv():
     if not os.path.exists(DATA_FILE):
         with open(DATA_FILE, mode='w', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow(["Timestamp", "TargetTime", "Expiration", "UpPrice", "DownPrice"])
+            writer.writerow(["Timestamp", "TargetTime", "Expiration", "UpPrice", "DownPrice", "UpVol", "DownVol"])
         print(f"Created {DATA_FILE}")
 
 def log_data():
@@ -52,14 +52,16 @@ def log_data():
     expiration_str = _format_et_timestamp(expiration)
     up_price = data['prices'].get('Up', 0.0)
     down_price = data['prices'].get('Down', 0.0)
+    up_volume = data.get('volumes', {}).get('Up', 0.0)
+    down_volume = data.get('volumes', {}).get('Down', 0.0)
     
-    row = [timestamp, target_time_str, expiration_str, up_price, down_price]
+    row = [timestamp, target_time_str, expiration_str, up_price, down_price, up_volume, down_volume]
     
     with open(DATA_FILE, mode='a', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(row)
         
-    print(f"[{timestamp}] Logged: Up={up_price}, Down={down_price}")
+    print(f"[{timestamp}] Logged: Up={up_price}, Down={down_price}, UpVol={up_volume}, DownVol={down_volume}")
 
 def main():
     print("Starting Data Logger...")
