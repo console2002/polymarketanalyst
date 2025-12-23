@@ -43,11 +43,68 @@ smoothing_window = st.slider("Derivative Smoothing Window (Moving Average)", min
 df = load_data()
 
 if df is not None and not df.empty:
-    # Get latest from raw data
-    latest = df.iloc[-1]
+    df = df.sort_values('Timestamp')
+    df['TargetTime_dt'] = pd.to_datetime(df['TargetTime'], format=TIME_FORMAT, errors='coerce')
+
+    if 'window_offset' not in st.session_state:
+        st.session_state.window_offset = 0
+
+    window_size = 4
+    target_times = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
+    total_markets = len(target_times)
+    max_offset = max(0, total_markets - window_size)
+    if st.session_state.window_offset > max_offset:
+        st.session_state.window_offset = max_offset
+
+    jump_default = df['TargetTime_dt'].max()
+    if pd.isna(jump_default):
+        jump_default = df['Timestamp'].max()
+
+    col_nav1, col_nav2, col_nav3, col_nav4 = st.columns([1, 1, 1, 4])
+    with col_nav1:
+        if st.button("Back", key="window_back_button", disabled=st.session_state.window_offset >= max_offset):
+            st.session_state.window_offset = min(max_offset, st.session_state.window_offset + 1)
+            st.rerun()
+    with col_nav2:
+        if st.button("Forward", key="window_forward_button", disabled=st.session_state.window_offset <= 0):
+            st.session_state.window_offset = max(0, st.session_state.window_offset - 1)
+            st.rerun()
+    with col_nav3:
+        if st.button("Latest", key="window_latest_button", disabled=st.session_state.window_offset == 0):
+            st.session_state.window_offset = 0
+            st.rerun()
+    with col_nav4:
+        jump_time = st.datetime_input(
+            "Jump to time",
+            value=jump_default,
+            help="Jump to the 4-market window that includes this time.",
+        )
+        if st.button("Jump", key="window_jump_button") and total_markets:
+            eligible_times = [t for t in target_times if t and t <= jump_time]
+            if eligible_times:
+                target_index = target_times.index(eligible_times[-1])
+            else:
+                target_index = 0
+            st.session_state.window_offset = max(0, total_markets - (target_index + 1))
+            st.rerun()
+
+    if total_markets:
+        window_end = total_markets - st.session_state.window_offset
+        window_start = max(0, window_end - window_size)
+        active_targets = target_times[window_start:window_end]
+        df_window = df[df['TargetTime_dt'].isin(active_targets)]
+    else:
+        df_window = df
+
+    if df_window.empty:
+        st.warning("No data available for the selected window.")
+        st.stop()
+
+    # Get latest from windowed data
+    latest = df_window.iloc[-1]
     
     # Process data for charts (add gaps between different markets)
-    df_chart = df.copy().sort_values('Timestamp')
+    df_chart = df_window.copy().sort_values('Timestamp')
     df_chart['group'] = (df_chart['TargetTime'] != df_chart['TargetTime'].shift()).cumsum()
     
     segments = []
@@ -111,7 +168,7 @@ if df is not None and not df.empty:
     # Calculate range based on mode
     current_range = None
     if st.session_state.zoom_mode == 'last_15m':
-        end_time = df['Timestamp'].max()
+        end_time = df_window['Timestamp'].max()
         start_time = end_time - pd.Timedelta(minutes=15)
         current_range = [start_time, end_time]
 
@@ -129,7 +186,7 @@ if df is not None and not df.empty:
 
     # Add vertical lines for market transitions to both plots
     # Identify where TargetTime changes
-    transitions = df.loc[df['TargetTime'].shift() != df['TargetTime'], 'Timestamp'].iloc[1:]
+    transitions = df_window.loc[df_window['TargetTime'].shift() != df_window['TargetTime'], 'Timestamp'].iloc[1:]
     
     for t in transitions:
         fig.add_vline(x=t, line_width=1, line_dash="dot", line_color="gray", row=1, col=1)
