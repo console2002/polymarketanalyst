@@ -359,15 +359,40 @@ class Backtester:
             equity_curve.append(equity)
 
         max_drawdown_pct = 0.0
+        max_drawdown_duration = 0
         if equity_curve:
             peak = equity_curve[0]
+            current_duration = 0
             for value in equity_curve:
                 if value > peak:
                     peak = value
+                    current_duration = 0
+                elif value < peak:
+                    current_duration += 1
+                    max_drawdown_duration = max(max_drawdown_duration, current_duration)
                 if peak > 0:
                     drawdown = (peak - value) / peak
                     max_drawdown_pct = max(max_drawdown_pct, drawdown)
         max_drawdown_pct *= 100
+
+        worst_loss = min((t['PnL'] for t in resolution_trades), default=0.0)
+        worst_loss_pct = (abs(worst_loss) / self.initial_capital * 100) if self.initial_capital > 0 else 0.0
+
+        pnl_series = [t['PnL'] for t in sorted_trades]
+
+        def worst_rolling_sum(values, window):
+            if len(values) < window:
+                return None
+            current_sum = sum(values[:window])
+            min_sum = current_sum
+            for i in range(window, len(values)):
+                current_sum += values[i] - values[i - window]
+                if current_sum < min_sum:
+                    min_sum = current_sum
+            return min_sum
+
+        worst_5_trade = worst_rolling_sum(pnl_series, 5)
+        worst_10_trade = worst_rolling_sum(pnl_series, 10)
         
         print(f"Number of Buy Trades: {len(buy_trades)}")
         print(f"Number of Markets Traded: {num_markets_played}")
@@ -377,9 +402,14 @@ class Backtester:
         print(f"Number of Winning Trades: {winning_trades_count}")
         print(f"Number of Losing Trades: {losing_trades_count}")
         print(f"Max Drawdown: {max_drawdown_pct:.2f}%")
+        print(f"Max Drawdown Duration (Trades): {max_drawdown_duration}")
         print(f"Avg Win (USD): ${avg_win:.2f}")
         print(f"Avg Loss (USD): ${avg_loss:.2f}")
+        print(f"Worst Loss (USD): ${worst_loss:.2f}")
+        print(f"Worst Loss (% of Bank): {worst_loss_pct:.2f}%")
         print(f"Max Consecutive Losses: {max_consecutive_losses}")
+        print(f"Worst 5-Trade PnL (USD): {worst_5_trade:.2f}" if worst_5_trade is not None else "Worst 5-Trade PnL (USD): N/A")
+        print(f"Worst 10-Trade PnL (USD): {worst_10_trade:.2f}" if worst_10_trade is not None else "Worst 10-Trade PnL (USD): N/A")
         print(f"Payoff Ratio: {payoff_ratio:.2f}")
         print(f"Expectancy (USD): ${expectancy:.2f}")
         print(f"Profit Factor: {profit_factor:.2f}")
