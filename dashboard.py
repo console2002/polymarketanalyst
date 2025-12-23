@@ -143,6 +143,17 @@ if df is not None and not df.empty:
     
 
     col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        target_time = latest['TargetTime_dt']
+        if pd.isna(target_time):
+            countdown_display = "N/A"
+        else:
+            remaining_seconds = int((target_time - pd.Timestamp.now()).total_seconds())
+            remaining_seconds = max(0, remaining_seconds)
+            minutes_left = remaining_seconds // 60
+            seconds_left = remaining_seconds % 60
+            countdown_display = f"{minutes_left:02d}:{seconds_left:02d}"
+        st.metric("Minutes Left (MM:SS)", countdown_display)
     with col3:
         st.metric("Yes (Up) Cost", f"${latest['UpPrice']:.3f}")
     with col4:
