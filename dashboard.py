@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
 import datetime
-import pytz
 import re
 
 
@@ -14,8 +13,6 @@ import re
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) or os.getcwd()
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
-TIMEZONE_ET = pytz.timezone("US/Eastern")
-TIMEZONE_UK = pytz.timezone("Europe/London")
 
 
 def _parse_date_from_filename(filename):
@@ -144,9 +141,6 @@ if df is not None and not df.empty:
 
     df = df.sort_values(time_column)
     df['TargetTime_dt'] = pd.to_datetime(df['TargetTime'], format=TIME_FORMAT, errors='coerce')
-    target_time_uk = df['TargetTime_dt'].dt.tz_localize(TIMEZONE_UK, nonexistent="shift_forward", ambiguous="NaT")
-    target_time_et = target_time_uk.dt.tz_convert(TIMEZONE_ET).dt.tz_localize(None)
-    target_time_uk = target_time_uk.dt.tz_localize(None)
 
     if 'window_offset' not in st.session_state:
         st.session_state.window_offset = 0
@@ -250,16 +244,14 @@ if df is not None and not df.empty:
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        target_time = latest['TargetTime_dt']
-        if pd.isna(target_time):
+        latest_timestamp = df_window[time_column].max()
+        market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
+        market_start_time = market_rows[time_column].min()
+        if pd.isna(market_start_time):
             countdown_display = "N/A"
         else:
-            latest_timestamp = df_window[time_column].max()
-            if time_column == "Timestamp":
-                target_time_value = target_time_et.loc[latest.name]
-            else:
-                target_time_value = target_time_uk.loc[latest.name]
-            remaining_seconds = int((target_time_value - latest_timestamp).total_seconds())
+            market_end_time = market_start_time + pd.Timedelta(minutes=15)
+            remaining_seconds = int((market_end_time - latest_timestamp).total_seconds())
             remaining_seconds = max(0, remaining_seconds)
             minutes_left = remaining_seconds // 60
             seconds_left = remaining_seconds % 60
