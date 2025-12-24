@@ -309,6 +309,13 @@ if df is not None and not df.empty:
         segments.append(gap_row)
     
     df_chart = pd.concat(segments).reset_index(drop=True)
+
+    df_chart["total_liq"] = df_chart["UpVol"] + df_chart["DownVol"]
+    df_chart["liq_imbalance"] = np.where(
+        df_chart["total_liq"] > 0,
+        (df_chart["UpVol"] - df_chart["DownVol"]) / df_chart["total_liq"],
+        np.nan,
+    )
     
     # Treat 0 prices as gaps
     df_chart.loc[df_chart['UpPrice'] == 0, 'UpPrice'] = np.nan
@@ -399,7 +406,7 @@ if df is not None and not df.empty:
     # Create Subplots with shared x-axis
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                         vertical_spacing=0.1,
-                        subplot_titles=("Probability History", "Liquidity", "Up Price Derivative/Momentum"))
+                        subplot_titles=("Probability History", "Liquidity (available size at quoted price)", "Up Price Derivative/Momentum"))
 
     # Probability Chart (Row 1)
     fig.add_trace(
@@ -427,13 +434,31 @@ if df is not None and not df.empty:
         col=1,
     )
     
-    # Volume Chart (Row 2)
+    liquidity_hover = (
+        "Time: %{x}<br>"
+        "Up liq: %{customdata[0]:,.2f}<br>"
+        "Down liq: %{customdata[1]:,.2f}<br>"
+        "Total liq: %{customdata[2]:,.2f}<br>"
+        "Imbalance: %{customdata[3]:.2%}"
+        "<extra></extra>"
+    )
+
+    liquidity_customdata = np.column_stack((
+        df_chart["UpVol"],
+        df_chart["DownVol"],
+        df_chart["total_liq"],
+        df_chart["liq_imbalance"],
+    ))
+
+    # Liquidity Chart (Row 2)
     fig.add_trace(
         go.Bar(
             x=df_chart[time_column],
             y=df_chart['UpVol'],
             name="Yes (Up) Liquidity",
             marker_color=colors["up"],
+            customdata=liquidity_customdata,
+            hovertemplate=liquidity_hover,
         ),
         row=2,
         col=1,
@@ -444,6 +469,8 @@ if df is not None and not df.empty:
             y=df_chart['DownVol'],
             name="No (Down) Liquidity",
             marker_color=colors["down"],
+            customdata=liquidity_customdata,
+            hovertemplate=liquidity_hover,
         ),
         row=2,
         col=1,
@@ -557,7 +584,7 @@ if df is not None and not df.empty:
         hovermode="x unified",
         xaxis_title="Time",
         yaxis=dict(title="Probability", range=[0, 1.05]),
-        yaxis2=dict(title="Liquidity", type=liquidity_y_scale),
+        yaxis2=dict(title="Liquidity (available size at quoted price)", type=liquidity_y_scale),
         yaxis3=dict(title="Rate of Change"),
         barmode=liquidity_bar_mode,
         xaxis=dict(rangeslider=dict(visible=False), type="date"),
