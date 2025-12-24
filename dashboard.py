@@ -59,6 +59,73 @@ def _resolve_data_file(selected_date, files_by_date, legacy_path):
 
 st.set_page_config(page_title="Polymarket BTC Monitor", layout="wide")
 
+st.sidebar.header("Analysis Controls")
+smoothing_window = st.sidebar.selectbox(
+    "Derivative smoothing window (moving average)",
+    options=list(range(1, 31)),
+    index=0,
+    help="Set the window size for the moving average applied to the derivative to smooth out zig-zag. A value of 1 means no smoothing.",
+)
+lookback_period = st.sidebar.number_input(
+    "Lookback period (markets)",
+    min_value=1,
+    max_value=20,
+    value=4,
+    step=1,
+    help="Number of markets to display in the window, including the current one.",
+)
+minutes_after_open = st.sidebar.number_input(
+    "Minutes after open",
+    min_value=1,
+    max_value=60,
+    value=5,
+    step=1,
+)
+entry_threshold = st.sidebar.number_input(
+    "Entry threshold",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.60,
+    step=0.01,
+    format="%.2f",
+)
+win_threshold = st.sidebar.number_input(
+    "Win threshold",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.99,
+    step=0.01,
+    format="%.2f",
+)
+resample_interval = st.sidebar.selectbox(
+    "Resample interval",
+    options=("5s", "15s", "30s", "60s"),
+    index=0,
+)
+liquidity_aggregation = st.sidebar.selectbox(
+    "Liquidity aggregation",
+    options=("sum", "mean"),
+    index=0,
+)
+liquidity_y_scale = st.sidebar.selectbox(
+    "Liquidity y-scale",
+    options=("linear", "log"),
+    index=0,
+)
+liquidity_bar_mode = st.sidebar.selectbox(
+    "Liquidity bar mode",
+    options=("group", "stack"),
+    index=0,
+)
+show_markers = st.sidebar.checkbox("Show markers", value=False)
+momentum_window_seconds = st.sidebar.number_input(
+    "Rolling window seconds for momentum",
+    min_value=1,
+    max_value=600,
+    value=60,
+    step=5,
+)
+
 def load_data(selected_date, files_by_date, legacy_path):
     try:
         data_file, resolved_date = _resolve_data_file(selected_date, files_by_date, legacy_path)
@@ -81,7 +148,7 @@ available_dates = sorted(files_by_date)
 latest_available_date = max(available_dates) if available_dates else None
 min_available_date = min(available_dates) if available_dates else None
 
-col_top1, col_top2, col_top3, col_top4 = st.columns(4)
+col_top1, col_top2 = st.columns(2)
 with col_top1:
     if st.button('Refresh Data', key='refresh_data_button', use_container_width=True):
         st.rerun()
@@ -98,24 +165,33 @@ with col_top2:
     else:
         selected_date = None
         st.caption("No dated CSV files found; using legacy data file if available.")
-with col_top3:
-    smoothing_window = st.selectbox(
-        "Derivative Smoothing Window (Moving Average)",
-        options=list(range(1, 31)),
-        index=0,
-        help="Set the window size for the moving average applied to the derivative to smooth out zig-zag. A value of 1 means no smoothing.",
-        use_container_width=True,
-    )
-with col_top4:
-    lookback_period = st.number_input(
-        "Lookback Period (Markets)",
-        min_value=1,
-        max_value=20,
-        value=4,
-        step=1,
-        help="Number of markets to display in the window, including the current one.",
-        use_container_width=True,
-    )
+
+
+def _resample_market_data(df, time_column, interval, liquidity_aggregation):
+    if df.empty or not interval:
+        return df
+    volume_agg = "sum" if liquidity_aggregation == "sum" else "mean"
+    resampled_groups = []
+    for target_time, group in df.groupby("TargetTime", sort=False):
+        if group.empty:
+            continue
+        group = group.sort_values(time_column)
+        resampled = group.set_index(time_column).resample(interval).agg(
+            {
+                "UpPrice": "mean",
+                "DownPrice": "mean",
+                "UpVol": volume_agg,
+                "DownVol": volume_agg,
+            }
+        )
+        resampled["TargetTime"] = target_time
+        if "TargetTime_dt" in group.columns:
+            resampled["TargetTime_dt"] = group["TargetTime_dt"].iloc[0]
+        resampled = resampled.reset_index()
+        resampled_groups.append(resampled)
+    if not resampled_groups:
+        return df
+    return pd.concat(resampled_groups, ignore_index=True)
 
 df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
 if selected_date and resolved_date and selected_date != resolved_date:
@@ -128,7 +204,7 @@ if df is not None and not df.empty:
     time_options = ["Polymarket Time (ET)"]
     if "Timestamp_UK" in df.columns:
         time_options.append("UK Time")
-    time_axis = st.selectbox(
+    time_axis = st.sidebar.selectbox(
         "Chart time axis",
         options=tuple(time_options),
         index=0,
@@ -200,6 +276,12 @@ if df is not None and not df.empty:
         st.warning("No data available for the selected window.")
         st.stop()
 
+    df_window = _resample_market_data(df_window, time_column, resample_interval, liquidity_aggregation)
+
+    if df_window.empty:
+        st.warning("No data available after resampling.")
+        st.stop()
+
     # Get latest from windowed data
     latest = df_window.iloc[-1]
     
@@ -240,7 +322,19 @@ if df is not None and not df.empty:
         df_chart['UpPrice_Derivative'] = df_chart.groupby('group')['UpPrice_Derivative'].transform(
             lambda x: x.rolling(window=smoothing_window, min_periods=1, center=True).mean()
         )
-    
+
+    def _rolling_momentum(group):
+        group = group.sort_values(time_column)
+        rolling_values = (
+            group.set_index(time_column)['UpPrice_Derivative']
+            .rolling(f"{int(momentum_window_seconds)}s", min_periods=1)
+            .mean()
+        )
+        return rolling_values.reset_index(drop=True)
+
+    df_chart['UpPrice_Momentum'] = df_chart.groupby('group', sort=False, group_keys=False).apply(
+        _rolling_momentum
+    )
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -286,24 +380,27 @@ if df is not None and not df.empty:
         start_time = end_time - pd.Timedelta(minutes=15)
         current_range = [start_time, end_time]
 
+    trace_mode = "lines+markers" if show_markers else "lines"
+
     # Create Subplots with shared x-axis
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                         vertical_spacing=0.1,
-                        subplot_titles=("Probability History", "Volume", "Up Price Derivative"))
+                        subplot_titles=("Probability History", "Liquidity", "Up Price Derivative/Momentum"))
 
     # Probability Chart (Row 1)
-    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpPrice'], name="Yes (Up)", line=dict(color='#00FF00', width=2), mode='lines+markers'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['DownPrice'], name="No (Down)", line=dict(color='rgba(255, 0, 0, 0.3)', dash='dash', width=2), mode='lines+markers'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpPrice'], name="Yes (Up)", line=dict(color='#00FF00', width=2), mode=trace_mode), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['DownPrice'], name="No (Down)", line=dict(color='rgba(255, 0, 0, 0.3)', dash='dash', width=2), mode=trace_mode), row=1, col=1)
     
     # Volume Chart (Row 2)
-    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpVol'], name="Yes (Up) Volume", line=dict(color='#00FF00', width=2), mode='lines+markers'), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['DownVol'], name="No (Down) Volume", line=dict(color='rgba(255, 0, 0, 0.3)', dash='dash', width=2), mode='lines+markers'), row=2, col=1)
+    fig.add_trace(go.Bar(x=df_chart[time_column], y=df_chart['UpVol'], name="Yes (Up) Liquidity", marker_color='#00FF00'), row=2, col=1)
+    fig.add_trace(go.Bar(x=df_chart[time_column], y=df_chart['DownVol'], name="No (Down) Liquidity", marker_color='rgba(255, 0, 0, 0.3)'), row=2, col=1)
 
     # Derivative Chart (Row 3)
-    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpPrice_Derivative'], name="Up Price Derivative", line=dict(color='#FFA500', width=2), mode='lines+markers'), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpPrice_Derivative'], name="Up Price Derivative", line=dict(color='#FFA500', width=2), mode=trace_mode), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpPrice_Momentum'], name="Up Price Momentum", line=dict(color='#1E90FF', width=2, dash="dot"), mode=trace_mode), row=3, col=1)
 
-    five_min_threshold = pd.Timedelta(minutes=5)
-    probability_threshold = 0.6
+    minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
+    probability_threshold = float(entry_threshold)
     expected_winner_traces = []
 
     for _, market_group in df_window.groupby('TargetTime', sort=False):
@@ -311,7 +408,7 @@ if df is not None and not df.empty:
         if market_group.empty:
             continue
         market_open = market_group[time_column].iloc[0]
-        five_min_mark = market_open + five_min_threshold
+        five_min_mark = market_open + minutes_threshold
 
         fig.add_vline(x=five_min_mark, line_width=1, line_dash="solid", line_color="rgba(200, 200, 200, 0.4)", row=1, col=1)
         fig.add_vline(x=five_min_mark, line_width=1, line_dash="solid", line_color="rgba(200, 200, 200, 0.4)", row=2, col=1)
@@ -356,7 +453,7 @@ if df is not None and not df.empty:
                 continue
             final_up = final_up_values.iloc[-1]
             final_down = final_down_values.iloc[-1]
-            win = final_up >= 0.99 if expected_side == "up" else final_down >= 0.99
+            win = final_up >= win_threshold if expected_side == "up" else final_down >= win_threshold
             fig.add_annotation(
                 x=market_group[time_column].iloc[-1],
                 y=1.03,
@@ -385,8 +482,9 @@ if df is not None and not df.empty:
         hovermode="x unified",
         xaxis_title="Time",
         yaxis=dict(title="Probability", range=[0, 1.05]),
-        yaxis2=dict(title="Volume"),
+        yaxis2=dict(title="Liquidity", type=liquidity_y_scale),
         yaxis3=dict(title="Rate of Change"),
+        barmode=liquidity_bar_mode,
         xaxis=dict(rangeslider=dict(visible=False), type="date"),
         xaxis2=dict(rangeslider=dict(visible=False), type="date"),
         xaxis3=dict(rangeslider=dict(visible=True), type="date")
