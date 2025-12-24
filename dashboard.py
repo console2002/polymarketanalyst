@@ -125,6 +125,14 @@ momentum_window_seconds = st.sidebar.number_input(
     value=60,
     step=5,
 )
+refresh_interval_seconds = st.sidebar.number_input(
+    "Auto-refresh interval (seconds)",
+    min_value=1,
+    max_value=60,
+    value=1,
+    step=1,
+    help="Controls the sleep duration for the auto-refresh loop.",
+)
 
 def load_data(selected_date, files_by_date, legacy_path):
     try:
@@ -512,5 +520,5 @@ if auto_refresh:
     # This will cause the Streamlit app to refresh after this delay.
     # Be aware that this will block the Streamlit server for this duration,
     # and might make Ctrl+C less responsive for longer sleep times.
-    time.sleep(1) # Refresh every 1 second
+    time.sleep(refresh_interval_seconds)
     st.rerun() # Explicitly rerun to ensure a full page refresh
