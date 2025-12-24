@@ -389,6 +389,12 @@ if df is not None and not df.empty:
         current_range = [start_time, end_time]
 
     trace_mode = "lines+markers" if show_markers else "lines"
+    colors = {
+        "up": "rgba(34, 139, 34, 0.7)",
+        "down": "rgba(220, 20, 60, 0.5)",
+        "derivative": "rgba(255, 165, 0, 0.7)",
+        "momentum": "rgba(30, 144, 255, 0.7)",
+    }
 
     # Create Subplots with shared x-axis
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
@@ -396,16 +402,76 @@ if df is not None and not df.empty:
                         subplot_titles=("Probability History", "Liquidity", "Up Price Derivative/Momentum"))
 
     # Probability Chart (Row 1)
-    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpPrice'], name="Yes (Up)", line=dict(color='#00FF00', width=2), mode=trace_mode), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['DownPrice'], name="No (Down)", line=dict(color='rgba(255, 0, 0, 0.3)', dash='dash', width=2), mode=trace_mode), row=1, col=1)
+    fig.add_trace(
+        go.Scatter(
+            x=df_chart[time_column],
+            y=df_chart['UpPrice'],
+            name="Yes (Up)",
+            line=dict(color=colors["up"], width=2),
+            line_shape="hv",
+            mode=trace_mode,
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df_chart[time_column],
+            y=df_chart['DownPrice'],
+            name="No (Down)",
+            line=dict(color=colors["down"], dash='dash', width=2),
+            line_shape="hv",
+            mode=trace_mode,
+        ),
+        row=1,
+        col=1,
+    )
     
     # Volume Chart (Row 2)
-    fig.add_trace(go.Bar(x=df_chart[time_column], y=df_chart['UpVol'], name="Yes (Up) Liquidity", marker_color='#00FF00'), row=2, col=1)
-    fig.add_trace(go.Bar(x=df_chart[time_column], y=df_chart['DownVol'], name="No (Down) Liquidity", marker_color='rgba(255, 0, 0, 0.3)'), row=2, col=1)
+    fig.add_trace(
+        go.Bar(
+            x=df_chart[time_column],
+            y=df_chart['UpVol'],
+            name="Yes (Up) Liquidity",
+            marker_color=colors["up"],
+        ),
+        row=2,
+        col=1,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=df_chart[time_column],
+            y=df_chart['DownVol'],
+            name="No (Down) Liquidity",
+            marker_color=colors["down"],
+        ),
+        row=2,
+        col=1,
+    )
 
     # Derivative Chart (Row 3)
-    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpPrice_Derivative'], name="Up Price Derivative", line=dict(color='#FFA500', width=2), mode=trace_mode), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpPrice_Momentum'], name="Up Price Momentum", line=dict(color='#1E90FF', width=2, dash="dot"), mode=trace_mode), row=3, col=1)
+    fig.add_trace(
+        go.Scatter(
+            x=df_chart[time_column],
+            y=df_chart['UpPrice_Derivative'],
+            name="Up Price Derivative",
+            line=dict(color=colors["derivative"], width=2),
+            mode=trace_mode,
+        ),
+        row=3,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df_chart[time_column],
+            y=df_chart['UpPrice_Momentum'],
+            name="Up Price Momentum",
+            line=dict(color=colors["momentum"], width=2, dash="dot"),
+            mode=trace_mode,
+        ),
+        row=3,
+        col=1,
+    )
 
     minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
     probability_threshold = float(entry_threshold)
@@ -487,6 +553,7 @@ if df is not None and not df.empty:
     # Update Layout
     fig.update_layout(
         height=1000,
+        template="plotly_white",
         hovermode="x unified",
         xaxis_title="Time",
         yaxis=dict(title="Probability", range=[0, 1.05]),
