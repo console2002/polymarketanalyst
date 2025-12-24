@@ -6,20 +6,45 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
 import datetime
+import pytz
 
 
 # Get the directory of the current script
 SCRIPT_DIR = os.path.dirname(__file__)
-DATA_FILE = os.path.join(SCRIPT_DIR, "market_data.csv")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
+DATE_FORMAT = "%d%m%Y"
+TIMEZONE_ET = pytz.timezone("US/Eastern")
+TIMEZONE_UK = pytz.timezone("Europe/London")
+
+
+def _get_latest_data_file():
+    candidates = []
+    for filename in os.listdir(SCRIPT_DIR):
+        if filename.endswith(".csv") and len(filename) == 12 and filename[:8].isdigit():
+            try:
+                file_date = datetime.datetime.strptime(filename[:8], DATE_FORMAT).date()
+            except ValueError:
+                continue
+            candidates.append((file_date, os.path.join(SCRIPT_DIR, filename)))
+    if candidates:
+        return max(candidates, key=lambda item: item[0])[1]
+    legacy_path = os.path.join(SCRIPT_DIR, "market_data.csv")
+    if os.path.exists(legacy_path):
+        return legacy_path
+    return None
 
 
 st.set_page_config(page_title="Polymarket BTC Monitor", layout="wide")
 
 def load_data():
     try:
-        df = pd.read_csv(DATA_FILE)
+        data_file = _get_latest_data_file()
+        if not data_file:
+            return None
+        df = pd.read_csv(data_file)
         df['Timestamp'] = pd.to_datetime(df['Timestamp'], format=TIME_FORMAT)
+        if 'Timestamp_UK' in df.columns:
+            df['Timestamp_UK'] = pd.to_datetime(df['Timestamp_UK'], format=TIME_FORMAT)
         return df
     except FileNotFoundError:
         return None
@@ -55,8 +80,25 @@ with col_top3:
 df = load_data()
 
 if df is not None and not df.empty:
-    df = df.sort_values('Timestamp')
+    time_options = ["Polymarket Time (ET)"]
+    if "Timestamp_UK" in df.columns:
+        time_options.append("UK Time")
+    time_axis = st.selectbox(
+        "Chart time axis",
+        options=tuple(time_options),
+        index=0,
+        help="Switch the chart between Polymarket (ET) and UK timestamps.",
+    )
+    time_column = "Timestamp" if time_axis == "Polymarket Time (ET)" else "Timestamp_UK"
+    if time_column not in df.columns:
+        st.warning("UK timestamps are not available in this data file.")
+        time_column = "Timestamp"
+
+    df = df.sort_values(time_column)
     df['TargetTime_dt'] = pd.to_datetime(df['TargetTime'], format=TIME_FORMAT, errors='coerce')
+    target_time_uk = df['TargetTime_dt'].dt.tz_localize(TIMEZONE_UK, nonexistent="shift_forward", ambiguous="NaT")
+    target_time_et = target_time_uk.dt.tz_convert(TIMEZONE_ET).dt.tz_localize(None)
+    target_time_uk = target_time_uk.dt.tz_localize(None)
 
     if 'window_offset' not in st.session_state:
         st.session_state.window_offset = 0
@@ -70,7 +112,7 @@ if df is not None and not df.empty:
 
     jump_default = df['TargetTime_dt'].max()
     if pd.isna(jump_default):
-        jump_default = df['Timestamp'].max()
+        jump_default = df[time_column].max()
 
     header_col, jump_col = st.columns([3, 2])
     with header_col:
@@ -120,7 +162,7 @@ if df is not None and not df.empty:
     latest = df_window.iloc[-1]
     
     # Process data for charts (add gaps between different markets)
-    df_chart = df_window.copy().sort_values('Timestamp')
+    df_chart = df_window.copy().sort_values(time_column)
     df_chart['group'] = (df_chart['TargetTime'] != df_chart['TargetTime'].shift()).cumsum()
     
     segments = []
@@ -128,9 +170,9 @@ if df is not None and not df.empty:
         segments.append(group)
         # Add gap row
         gap_row = group.iloc[[-1]].copy()
-        gap_row['Timestamp'] += pd.Timedelta(seconds=1) 
+        gap_row[time_column] += pd.Timedelta(seconds=1) 
         # Set values to NaN to break the line
-        for col in ['UpPrice', 'DownPrice']:
+        for col in ['UpPrice', 'DownPrice', 'UpVol', 'DownVol']:
             gap_row[col] = np.nan
         segments.append(gap_row)
     
@@ -143,7 +185,7 @@ if df is not None and not df.empty:
     # Calculate numerical derivative of UpPrice
     # Calculate diff only within each group (market segment)
     df_chart['UpPrice_diff'] = df_chart.groupby('group')['UpPrice'].diff()
-    df_chart['Timestamp_diff_seconds'] = df_chart.groupby('group')['Timestamp'].diff().dt.total_seconds()
+    df_chart['Timestamp_diff_seconds'] = df_chart.groupby('group')[time_column].diff().dt.total_seconds()
     
     # Avoid division by zero and handle cases where Timestamp_diff_seconds might be 0 or NaN
     df_chart['UpPrice_Derivative'] = df_chart['UpPrice_diff'] / df_chart['Timestamp_diff_seconds']
@@ -160,12 +202,16 @@ if df is not None and not df.empty:
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        target_time = df['TargetTime_dt'].max()
+        target_time = latest['TargetTime_dt']
         if pd.isna(target_time):
             countdown_display = "N/A"
         else:
-            latest_timestamp = df['Timestamp'].max()
-            remaining_seconds = int((target_time - latest_timestamp).total_seconds())
+            latest_timestamp = df_window[time_column].max()
+            if time_column == "Timestamp":
+                target_time_value = target_time_et.loc[latest.name]
+            else:
+                target_time_value = target_time_uk.loc[latest.name]
+            remaining_seconds = int((target_time_value - latest_timestamp).total_seconds())
             remaining_seconds = max(0, remaining_seconds)
             minutes_left = remaining_seconds // 60
             seconds_left = remaining_seconds % 60
@@ -196,37 +242,42 @@ if df is not None and not df.empty:
     # Calculate range based on mode
     current_range = None
     if st.session_state.zoom_mode == 'last_15m':
-        end_time = df_window['Timestamp'].max()
+        end_time = df_window[time_column].max()
         start_time = end_time - pd.Timedelta(minutes=15)
         current_range = [start_time, end_time]
 
     # Create Subplots with shared x-axis
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                         vertical_spacing=0.1,
-                        subplot_titles=("Probability History", "Up Price Derivative"))
+                        subplot_titles=("Probability History", "Volume", "Up Price Derivative"))
 
     # Probability Chart (Row 1)
-    fig.add_trace(go.Scatter(x=df_chart['Timestamp'], y=df_chart['UpPrice'], name="Yes (Up)", line=dict(color='#00FF00', width=2), mode='lines+markers'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df_chart['Timestamp'], y=df_chart['DownPrice'], name="No (Down)", line=dict(color='rgba(255, 0, 0, 0.3)', dash='dash', width=2), mode='lines+markers'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpPrice'], name="Yes (Up)", line=dict(color='#00FF00', width=2), mode='lines+markers'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['DownPrice'], name="No (Down)", line=dict(color='rgba(255, 0, 0, 0.3)', dash='dash', width=2), mode='lines+markers'), row=1, col=1)
     
-    # Derivative Chart (Row 2)
-    fig.add_trace(go.Scatter(x=df_chart['Timestamp'], y=df_chart['UpPrice_Derivative'], name="Up Price Derivative", line=dict(color='#FFA500', width=2), mode='lines+markers'), row=2, col=1)
+    # Volume Chart (Row 2)
+    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpVol'], name="Yes (Up) Volume", line=dict(color='#00FF00', width=2), mode='lines+markers'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['DownVol'], name="No (Down) Volume", line=dict(color='rgba(255, 0, 0, 0.3)', dash='dash', width=2), mode='lines+markers'), row=2, col=1)
+
+    # Derivative Chart (Row 3)
+    fig.add_trace(go.Scatter(x=df_chart[time_column], y=df_chart['UpPrice_Derivative'], name="Up Price Derivative", line=dict(color='#FFA500', width=2), mode='lines+markers'), row=3, col=1)
 
     five_min_threshold = pd.Timedelta(minutes=5)
     probability_threshold = 0.6
     expected_winner_traces = []
 
     for _, market_group in df_window.groupby('TargetTime', sort=False):
-        market_group = market_group.sort_values('Timestamp')
+        market_group = market_group.sort_values(time_column)
         if market_group.empty:
             continue
-        market_open = market_group['Timestamp'].iloc[0]
+        market_open = market_group[time_column].iloc[0]
         five_min_mark = market_open + five_min_threshold
 
         fig.add_vline(x=five_min_mark, line_width=1, line_dash="solid", line_color="rgba(200, 200, 200, 0.4)", row=1, col=1)
         fig.add_vline(x=five_min_mark, line_width=1, line_dash="solid", line_color="rgba(200, 200, 200, 0.4)", row=2, col=1)
+        fig.add_vline(x=five_min_mark, line_width=1, line_dash="solid", line_color="rgba(200, 200, 200, 0.4)", row=3, col=1)
 
-        eligible = market_group[market_group['Timestamp'] >= five_min_mark].copy()
+        eligible = market_group[market_group[time_column] >= five_min_mark].copy()
         if eligible.empty:
             continue
 
@@ -241,9 +292,9 @@ if df is not None and not df.empty:
         down_cross_index = find_crossing(eligible['DownPrice'])
         candidates = []
         if up_cross_index is not None:
-            candidates.append(("up", eligible.loc[up_cross_index, 'Timestamp'], eligible.loc[up_cross_index, 'UpPrice']))
+            candidates.append(("up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, 'UpPrice']))
         if down_cross_index is not None:
-            candidates.append(("down", eligible.loc[down_cross_index, 'Timestamp'], eligible.loc[down_cross_index, 'DownPrice']))
+            candidates.append(("down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, 'DownPrice']))
 
         if candidates:
             expected_side, cross_time, cross_value = min(candidates, key=lambda item: item[1])
@@ -267,7 +318,7 @@ if df is not None and not df.empty:
             final_down = final_down_values.iloc[-1]
             win = final_up >= 0.99 if expected_side == "up" else final_down >= 0.99
             fig.add_annotation(
-                x=market_group['Timestamp'].iloc[-1],
+                x=market_group[time_column].iloc[-1],
                 y=1.03,
                 text="Win" if win else "Lose",
                 showarrow=False,
@@ -281,26 +332,30 @@ if df is not None and not df.empty:
 
     # Add vertical lines for market transitions to both plots
     # Identify where TargetTime changes
-    transitions = df_window.loc[df_window['TargetTime'].shift() != df_window['TargetTime'], 'Timestamp'].iloc[1:]
+    transitions = df_window.loc[df_window['TargetTime'].shift() != df_window['TargetTime'], time_column].iloc[1:]
     
     for t in transitions:
         fig.add_vline(x=t, line_width=1, line_dash="dot", line_color="gray", row=1, col=1)
-        fig.add_vline(x=t, line_width=1, line_dash="dot", line_color="gray", row=2, col=1) # Add to second subplot
+        fig.add_vline(x=t, line_width=1, line_dash="dot", line_color="gray", row=2, col=1)
+        fig.add_vline(x=t, line_width=1, line_dash="dot", line_color="gray", row=3, col=1)
     
     # Update Layout
     fig.update_layout(
-        height=800, # Increased height for two subplots
+        height=1000,
         hovermode="x unified",
         xaxis_title="Time",
-        yaxis=dict(title="Probability", range=[0, 1.05]), # Title for first y-axis
-        yaxis2=dict(title="Rate of Change"), # Title for second y-axis
+        yaxis=dict(title="Probability", range=[0, 1.05]),
+        yaxis2=dict(title="Volume"),
+        yaxis3=dict(title="Rate of Change"),
         xaxis=dict(rangeslider=dict(visible=False), type="date"),
-        xaxis2=dict(rangeslider=dict(visible=True), type="date")
+        xaxis2=dict(rangeslider=dict(visible=False), type="date"),
+        xaxis3=dict(rangeslider=dict(visible=True), type="date")
     )
     # Explicitly set range for xaxis1 and xaxis2 (main and shared x-axes)
     if current_range:
         fig.update_xaxes(range=current_range, row=1, col=1)
         fig.update_xaxes(range=current_range, row=2, col=1)
+        fig.update_xaxes(range=current_range, row=3, col=1)
 
     # Enable crosshair (spike lines) across both subplots
     fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
