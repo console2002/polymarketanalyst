@@ -83,7 +83,7 @@ min_available_date = min(available_dates) if available_dates else None
 
 col_top1, col_top2, col_top3, col_top4 = st.columns(4)
 with col_top1:
-    if st.button('Refresh Data', key='refresh_data_button', width="stretch"):
+    if st.button('Refresh Data', key='refresh_data_button', use_container_width=True):
         st.rerun()
     auto_refresh = st.checkbox("Auto-refresh", value=True)
 with col_top2:
@@ -104,7 +104,7 @@ with col_top3:
         options=list(range(1, 31)),
         index=0,
         help="Set the window size for the moving average applied to the derivative to smooth out zig-zag. A value of 1 means no smoothing.",
-        width="stretch",
+        use_container_width=True,
     )
 with col_top4:
     lookback_period = st.number_input(
@@ -114,7 +114,7 @@ with col_top4:
         value=4,
         step=1,
         help="Number of markets to display in the window, including the current one.",
-        width="stretch",
+        use_container_width=True,
     )
 
 df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
@@ -400,7 +400,7 @@ if df is not None and not df.empty:
     # Enable crosshair (spike lines) across both subplots
     fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
     
-    st.plotly_chart(fig, width="stretch", config={'scrollZoom': True})
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
     
     st.caption(f"Last updated: {latest['Timestamp']}")
 
