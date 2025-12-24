@@ -7,58 +7,101 @@ from plotly.subplots import make_subplots
 import time
 import datetime
 import pytz
+import re
 
 
 # Get the directory of the current script
-SCRIPT_DIR = os.path.dirname(__file__)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) or os.getcwd()
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
 TIMEZONE_ET = pytz.timezone("US/Eastern")
 TIMEZONE_UK = pytz.timezone("Europe/London")
 
 
-def _get_latest_data_file():
-    candidates = []
-    for filename in os.listdir(SCRIPT_DIR):
-        if filename.endswith(".csv") and len(filename) == 12 and filename[:8].isdigit():
-            try:
-                file_date = datetime.datetime.strptime(filename[:8], DATE_FORMAT).date()
-            except ValueError:
-                continue
-            candidates.append((file_date, os.path.join(SCRIPT_DIR, filename)))
-    if candidates:
-        return max(candidates, key=lambda item: item[0])[1]
-    legacy_path = os.path.join(SCRIPT_DIR, "market_data.csv")
-    if os.path.exists(legacy_path):
-        return legacy_path
+def _parse_date_from_filename(filename):
+    name = os.path.splitext(filename)[0]
+    patterns = [
+        (r"(?P<date>\d{2}\d{2}\d{4})", "%d%m%Y"),
+        (r"(?P<date>\d{4}\d{2}\d{2})", "%Y%m%d"),
+        (r"(?P<date>\d{4}-\d{2}-\d{2})", "%Y-%m-%d"),
+        (r"(?P<date>\d{2}-\d{2}-\d{4})", "%d-%m-%Y"),
+    ]
+    for pattern, date_format in patterns:
+        match = re.search(pattern, name)
+        if not match:
+            continue
+        try:
+            return datetime.datetime.strptime(match.group("date"), date_format).date()
+        except ValueError:
+            continue
     return None
+
+
+def _get_available_data_files():
+    files_by_date = {}
+    for filename in os.listdir(SCRIPT_DIR):
+        if not filename.endswith(".csv"):
+            continue
+        file_date = _parse_date_from_filename(filename)
+        if file_date:
+            files_by_date[file_date] = os.path.join(SCRIPT_DIR, filename)
+    legacy_path = os.path.join(SCRIPT_DIR, "market_data.csv")
+    if not os.path.exists(legacy_path):
+        legacy_path = None
+    return files_by_date, legacy_path
+
+
+def _resolve_data_file(selected_date, files_by_date, legacy_path):
+    if selected_date and selected_date in files_by_date:
+        return files_by_date[selected_date], selected_date
+    if files_by_date:
+        latest_date = max(files_by_date)
+        return files_by_date[latest_date], latest_date
+    return legacy_path, None
 
 
 st.set_page_config(page_title="Polymarket BTC Monitor", layout="wide")
 
-def load_data():
+def load_data(selected_date, files_by_date, legacy_path):
     try:
-        data_file = _get_latest_data_file()
+        data_file, resolved_date = _resolve_data_file(selected_date, files_by_date, legacy_path)
         if not data_file:
-            return None
+            return None, None
         df = pd.read_csv(data_file)
         df['Timestamp'] = pd.to_datetime(df['Timestamp'], format=TIME_FORMAT)
         if 'Timestamp_UK' in df.columns:
             df['Timestamp_UK'] = pd.to_datetime(df['Timestamp_UK'], format=TIME_FORMAT)
-        return df
+        return df, resolved_date
     except FileNotFoundError:
-        return None
+        return None, None
     except Exception as e: # Catch other potential errors during loading/parsing
         st.error(f"Error loading data: {e}")
-        return None
+        return None, None
 
 # Top-row controls
-col_top1, col_top2, col_top3 = st.columns(3)
+files_by_date, legacy_path = _get_available_data_files()
+available_dates = sorted(files_by_date)
+latest_available_date = max(available_dates) if available_dates else None
+min_available_date = min(available_dates) if available_dates else None
+
+col_top1, col_top2, col_top3, col_top4 = st.columns(4)
 with col_top1:
     if st.button('Refresh Data', key='refresh_data_button', width="stretch"):
         st.rerun()
     auto_refresh = st.checkbox("Auto-refresh", value=True)
 with col_top2:
+    if available_dates:
+        selected_date = st.date_input(
+            "Data date",
+            value=latest_available_date,
+            min_value=min_available_date,
+            max_value=latest_available_date,
+            help="Select a historical data file by date. Defaults to the latest available file.",
+        )
+    else:
+        selected_date = None
+        st.caption("No dated CSV files found; using legacy data file if available.")
+with col_top3:
     smoothing_window = st.selectbox(
         "Derivative Smoothing Window (Moving Average)",
         options=list(range(1, 31)),
@@ -66,7 +109,7 @@ with col_top2:
         help="Set the window size for the moving average applied to the derivative to smooth out zig-zag. A value of 1 means no smoothing.",
         width="stretch",
     )
-with col_top3:
+with col_top4:
     lookback_period = st.number_input(
         "Lookback Period (Markets)",
         min_value=1,
@@ -77,7 +120,12 @@ with col_top3:
         width="stretch",
     )
 
-df = load_data()
+df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
+if selected_date and resolved_date and selected_date != resolved_date:
+    st.info(
+        f"No data file found for {selected_date.strftime('%Y-%m-%d')}. "
+        f"Showing {resolved_date.strftime('%Y-%m-%d')} instead."
+    )
 
 if df is not None and not df.empty:
     time_options = ["Polymarket Time (ET)"]
