@@ -11,7 +11,7 @@ import re
 
 
 # Get the directory of the current script
-SCRIPT_DIR = os.path.dirname(__file__)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) or os.getcwd()
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
 TIMEZONE_ET = pytz.timezone("US/Eastern")
