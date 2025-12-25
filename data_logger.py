@@ -12,6 +12,8 @@ TIMEZONE_UK = pytz.timezone("Europe/London")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
 SCRIPT_DIR = os.path.dirname(__file__)
+_LAST_VALID_PRICES = {}
+_LAST_VALID_VOLUMES = {}
 
 
 def _format_timestamp(value, timezone):
@@ -48,20 +50,47 @@ def _ensure_csv(file_path):
         print(f"Created {file_path}")
 
 
-def _next_log_time(current_time, target_time):
-    if not current_time:
-        current_time = datetime.datetime.now(pytz.utc)
-    if current_time.tzinfo is None:
-        current_time = pytz.utc.localize(current_time)
-    if not target_time:
-        return current_time + datetime.timedelta(seconds=LOGGING_INTERVAL_SECONDS)
-    if target_time.tzinfo is None:
-        target_time = pytz.utc.localize(target_time)
-    if current_time < target_time:
-        return target_time
-    elapsed_seconds = (current_time - target_time).total_seconds()
-    steps = math.floor(elapsed_seconds / LOGGING_INTERVAL_SECONDS) + 1
-    return target_time + datetime.timedelta(seconds=steps * LOGGING_INTERVAL_SECONDS)
+def _align_timestamp_to_interval(timestamp_dt, interval_seconds):
+    if not timestamp_dt:
+        timestamp_dt = datetime.datetime.now(pytz.utc)
+    if timestamp_dt.tzinfo is None:
+        timestamp_dt = pytz.utc.localize(timestamp_dt)
+    epoch_seconds = timestamp_dt.timestamp()
+    aligned_seconds = math.floor(epoch_seconds / interval_seconds) * interval_seconds
+    return datetime.datetime.fromtimestamp(aligned_seconds, tz=datetime.timezone.utc)
+
+
+def _next_interval_time(timestamp_dt, interval_seconds):
+    if not timestamp_dt:
+        timestamp_dt = datetime.datetime.now(pytz.utc)
+    if timestamp_dt.tzinfo is None:
+        timestamp_dt = pytz.utc.localize(timestamp_dt)
+    epoch_seconds = timestamp_dt.timestamp()
+    next_seconds = math.floor(epoch_seconds / interval_seconds) * interval_seconds + interval_seconds
+    return datetime.datetime.fromtimestamp(next_seconds, tz=datetime.timezone.utc)
+
+
+def _get_valid_prices(prices):
+    if not prices:
+        return None
+    up_price = prices.get("Up")
+    down_price = prices.get("Down")
+    if up_price and down_price and up_price > 0 and down_price > 0:
+        _LAST_VALID_PRICES.update({"Up": up_price, "Down": down_price})
+        return {"Up": up_price, "Down": down_price}
+    if _LAST_VALID_PRICES:
+        return _LAST_VALID_PRICES.copy()
+    return None
+
+
+def _get_valid_volumes(volumes):
+    if not volumes:
+        return _LAST_VALID_VOLUMES.copy() if _LAST_VALID_VOLUMES else None
+    up_volume = volumes.get("Up", 0.0)
+    down_volume = volumes.get("Down", 0.0)
+    _LAST_VALID_VOLUMES.update({"Up": up_volume, "Down": down_volume})
+    return {"Up": up_volume, "Down": down_volume}
+
 
 def log_data(fetched_data=None, timestamp_dt=None):
     if fetched_data is None:
@@ -78,9 +107,8 @@ def log_data(fetched_data=None, timestamp_dt=None):
     
     # Check if data is complete
     data = None
-    if fetched_data and \
-       fetched_data.get('prices') is not None:
-         data = fetched_data
+    if fetched_data and fetched_data.get('prices') is not None:
+        data = fetched_data
     else:
         error_msg = err if err else "Missing fields"
         print(f"[{timestamp_et}] Error: Could not retrieve full data ({error_msg})")
@@ -92,10 +120,16 @@ def log_data(fetched_data=None, timestamp_dt=None):
 
     target_time_str = _format_timestamp(target_time, TIMEZONE_UK)
     expiration_str = _format_timestamp(expiration, TIMEZONE_UK)
-    up_price = data['prices'].get('Up', 0.0)
-    down_price = data['prices'].get('Down', 0.0)
-    up_volume = data.get('volumes', {}).get('Up', 0.0)
-    down_volume = data.get('volumes', {}).get('Down', 0.0)
+    prices = _get_valid_prices(data.get('prices', {}))
+    volumes = _get_valid_volumes(data.get('volumes', {}))
+    if not prices:
+        print(f"[{timestamp_et}] Error: Invalid or zero prices received; skipping log.")
+        return
+
+    up_price = prices.get('Up', 0.0)
+    down_price = prices.get('Down', 0.0)
+    up_volume = volumes.get('Up', 0.0) if volumes else 0.0
+    down_volume = volumes.get('Down', 0.0) if volumes else 0.0
     
     row = [
         timestamp_et,
@@ -123,24 +157,24 @@ def main():
     while True:
         try:
             fetched_data, err = fetch_polymarket_data_struct()
-            timestamp_dt = fetched_data.get("polymarket_time_utc") if fetched_data else None
-            if not timestamp_dt:
-                timestamp_dt = datetime.datetime.now(pytz.utc)
+            now_utc = datetime.datetime.now(pytz.utc)
             target_time = fetched_data.get("target_time_utc") if fetched_data else None
 
             if err:
-                print(f"[{_format_timestamp(timestamp_dt, TIMEZONE_ET)}] Error: {err}")
-                time.sleep(LOGGING_INTERVAL_SECONDS)
+                print(f"[{_format_timestamp(now_utc, TIMEZONE_ET)}] Error: {err}")
+                next_log_time = _next_interval_time(now_utc, LOGGING_INTERVAL_SECONDS)
+                time.sleep(max(0, (next_log_time - now_utc).total_seconds()))
                 continue
 
-            if target_time and timestamp_dt < target_time:
-                sleep_seconds = (target_time - timestamp_dt).total_seconds()
+            if target_time and now_utc < target_time:
+                sleep_seconds = (target_time - now_utc).total_seconds()
                 time.sleep(max(0, sleep_seconds))
                 continue
 
-            log_data(fetched_data=fetched_data, timestamp_dt=timestamp_dt)
-            next_log_time = _next_log_time(timestamp_dt, target_time)
-            sleep_seconds = (next_log_time - timestamp_dt).total_seconds()
+            log_timestamp = _align_timestamp_to_interval(now_utc, LOGGING_INTERVAL_SECONDS)
+            log_data(fetched_data=fetched_data, timestamp_dt=log_timestamp)
+            next_log_time = _next_interval_time(now_utc, LOGGING_INTERVAL_SECONDS)
+            sleep_seconds = (next_log_time - now_utc).total_seconds()
             time.sleep(max(0, sleep_seconds))
         except KeyboardInterrupt:
             print("\nStopping logger...")
