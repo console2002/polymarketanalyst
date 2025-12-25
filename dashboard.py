@@ -15,6 +15,13 @@ TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
 
 
+def add_vline_all_rows(fig, x, **kwargs):
+    grid_ref = getattr(fig, "_grid_ref", None)
+    row_count = len(grid_ref) if grid_ref else 1
+    for row in range(1, row_count + 1):
+        fig.add_vline(x=x, row=row, col=1, **kwargs)
+
+
 def _parse_date_from_filename(filename):
     name = os.path.splitext(filename)[0]
     patterns = [
@@ -542,13 +549,17 @@ if df is not None and not df.empty:
         if market_group.empty:
             continue
         market_open = market_group[time_column].iloc[0]
-        five_min_mark = market_open + minutes_threshold
+        open_threshold_time = market_open + minutes_threshold
 
-        fig.add_vline(x=five_min_mark, line_width=1, line_dash="solid", line_color="rgba(200, 200, 200, 0.4)", row=1, col=1)
-        fig.add_vline(x=five_min_mark, line_width=1, line_dash="solid", line_color="rgba(200, 200, 200, 0.4)", row=2, col=1)
-        fig.add_vline(x=five_min_mark, line_width=1, line_dash="solid", line_color="rgba(200, 200, 200, 0.4)", row=3, col=1)
+        add_vline_all_rows(
+            fig,
+            open_threshold_time,
+            line_width=1,
+            line_dash="solid",
+            line_color="rgba(200, 200, 200, 0.4)",
+        )
 
-        eligible = market_group[market_group[time_column] >= five_min_mark].copy()
+        eligible = market_group[market_group[time_column] >= open_threshold_time].copy()
         if eligible.empty:
             continue
 
@@ -606,9 +617,7 @@ if df is not None and not df.empty:
     transitions = df_window.loc[df_window['TargetTime'].shift() != df_window['TargetTime'], time_column].iloc[1:]
     
     for t in transitions:
-        fig.add_vline(x=t, line_width=1, line_dash="dot", line_color="gray", row=1, col=1)
-        fig.add_vline(x=t, line_width=1, line_dash="dot", line_color="gray", row=2, col=1)
-        fig.add_vline(x=t, line_width=1, line_dash="dot", line_color="gray", row=3, col=1)
+        add_vline_all_rows(fig, t, line_width=1, line_dash="dot", line_color="gray")
     
     # Update Layout
     fig.update_layout(
