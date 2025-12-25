@@ -635,6 +635,76 @@ if df is not None and not df.empty:
     fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
     
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+
+    summary_rows = []
+    probability_threshold = float(entry_threshold)
+    minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
+    if total_markets:
+        target_order = active_targets
+    else:
+        target_order = df_window['TargetTime_dt'].dropna().drop_duplicates().tolist()
+
+    for target_time in target_order:
+        market_group = df_window[df_window['TargetTime_dt'] == target_time].sort_values(time_column)
+        if market_group.empty:
+            continue
+        market_open = market_group[time_column].iloc[0]
+        eligible = market_group[market_group[time_column] >= market_open + minutes_threshold].copy()
+
+        def find_crossing(series):
+            above = series >= probability_threshold
+            crossings = above & ~above.shift(fill_value=False)
+            if crossings.any():
+                return crossings[crossings].index[0]
+            return None
+
+        expected_side = None
+        cross_time = None
+        cross_value = None
+        if not eligible.empty:
+            up_cross_index = find_crossing(eligible['UpPrice'])
+            down_cross_index = find_crossing(eligible['DownPrice'])
+            candidates = []
+            if up_cross_index is not None:
+                candidates.append(("Up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, 'UpPrice']))
+            if down_cross_index is not None:
+                candidates.append(("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, 'DownPrice']))
+            if candidates:
+                expected_side, cross_time, cross_value = min(candidates, key=lambda item: item[1])
+
+        final_up_values = market_group['UpPrice'].replace(0, np.nan).dropna()
+        final_down_values = market_group['DownPrice'].replace(0, np.nan).dropna()
+        final_up = final_up_values.iloc[-1] if not final_up_values.empty else np.nan
+        final_down = final_down_values.iloc[-1] if not final_down_values.empty else np.nan
+
+        outcome = "N/A"
+        if expected_side == "Up" and pd.notna(final_up):
+            outcome = "Win" if final_up >= win_threshold else "Lose"
+        elif expected_side == "Down" and pd.notna(final_down):
+            outcome = "Win" if final_down >= win_threshold else "Lose"
+
+        total_liq_series = market_group['UpVol'] + market_group['DownVol']
+        up_price_series = market_group['UpPrice'].replace(0, np.nan)
+        summary_rows.append(
+            {
+                "TargetTime": market_group['TargetTime'].iloc[0],
+                "Market Open": market_open,
+                "First Crossing Side": expected_side or "None",
+                "Crossing Time": cross_time,
+                "Crossing Price": cross_value,
+                "Final UpPrice": final_up,
+                "Final DownPrice": final_down,
+                "Win/Lose": outcome,
+                "Mean Total Liquidity": total_liq_series.mean(),
+                "Max Total Liquidity": total_liq_series.max(),
+                "Max UpPrice": up_price_series.max(),
+                "Min UpPrice": up_price_series.min(),
+            }
+        )
+
+    with st.expander("Window summary"):
+        summary_df = pd.DataFrame(summary_rows)
+        st.dataframe(summary_df, use_container_width=True)
     
     st.caption(f"Last updated: {latest['Timestamp']}")
 
