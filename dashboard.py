@@ -195,6 +195,14 @@ def _resample_market_data(df, time_column, interval, liquidity_aggregation):
         return df
     return pd.concat(resampled_groups, ignore_index=True)
 
+def _format_metric(value, formatter):
+    if value is None or pd.isna(value):
+        return "N/A"
+    try:
+        return formatter(value)
+    except (TypeError, ValueError):
+        return "N/A"
+
 df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
 if selected_date and resolved_date and selected_date != resolved_date:
     st.info(
@@ -330,7 +338,14 @@ if df is not None and not df.empty:
         .transform(lambda x: x.diff().rolling(momentum_window_points, min_periods=1).mean())
     )
 
-    col1, col2, col3, col4 = st.columns(4)
+    latest_up_vol = latest.get("UpVol")
+    latest_down_vol = latest.get("DownVol")
+    total_liquidity = latest_up_vol + latest_down_vol
+    liquidity_imbalance = np.nan
+    if pd.notna(total_liquidity) and total_liquidity > 0:
+        liquidity_imbalance = (latest_up_vol - latest_down_vol) / total_liquidity
+
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         latest_timestamp = df_window[time_column].max()
         market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
@@ -345,10 +360,26 @@ if df is not None and not df.empty:
             seconds_left = remaining_seconds % 60
             countdown_display = f"{minutes_left:02d}:{seconds_left:02d}"
         st.metric("Minutes Left (MM:SS)", countdown_display)
+    with col2:
+        st.metric(
+            "Total Liquidity",
+            _format_metric(total_liquidity, lambda v: f"{v:,.2f}"),
+        )
     with col3:
-        st.metric("Yes (Up) Cost", f"${latest['UpPrice']:.2f}")
+        st.metric(
+            "Liquidity Imbalance",
+            _format_metric(liquidity_imbalance, lambda v: f"{v:.2%}"),
+        )
     with col4:
-        st.metric("No (Down) Cost", f"${latest['DownPrice']:.2f}")
+        st.metric(
+            "Yes (Up) Cost",
+            _format_metric(latest.get("UpPrice"), lambda v: f"${v:.2f}"),
+        )
+    with col5:
+        st.metric(
+            "No (Down) Cost",
+            _format_metric(latest.get("DownPrice"), lambda v: f"${v:.2f}"),
+        )
 
 
     
