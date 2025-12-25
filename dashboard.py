@@ -180,8 +180,8 @@ def _resample_market_data(df, time_column, interval, liquidity_aggregation):
         group = group.sort_values(time_column)
         resampled = group.set_index(time_column).resample(interval).agg(
             {
-                "UpPrice": "mean",
-                "DownPrice": "mean",
+                "UpPrice": "last",
+                "DownPrice": "last",
                 "UpVol": volume_agg,
                 "DownVol": volume_agg,
             }
