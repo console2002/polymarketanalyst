@@ -118,7 +118,7 @@ liquidity_bar_mode = st.sidebar.selectbox(
     options=("group", "stack"),
     index=0,
 )
-show_markers = st.sidebar.checkbox("Show markers", value=False)
+show_markers = st.sidebar.checkbox("Show markers", value=True)
 momentum_window_seconds = st.sidebar.number_input(
     "Rolling window seconds for momentum",
     min_value=1,
@@ -437,8 +437,8 @@ if df is not None and not df.empty:
             x=df_chart[time_column],
             y=df_chart['UpPrice'],
             name="Yes (Up)",
-            line=dict(color=colors["up"], width=2),
-            line_shape="hv",
+            line=dict(color=colors["up"], width=2, shape="spline", smoothing=1.1),
+            connectgaps=True,
             mode=trace_mode,
         ),
         row=1,
@@ -449,8 +449,8 @@ if df is not None and not df.empty:
             x=df_chart[time_column],
             y=df_chart['DownPrice'],
             name="No (Down)",
-            line=dict(color=colors["down"], dash='dash', width=2),
-            line_shape="hv",
+            line=dict(color=colors["down"], dash='dash', width=2, shape="spline", smoothing=1.1),
+            connectgaps=True,
             mode=trace_mode,
         ),
         row=1,
