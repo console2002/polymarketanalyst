@@ -561,9 +561,10 @@ if df is not None and not df.empty:
     minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
     probability_threshold = float(entry_threshold)
     expected_winner_traces = []
+    ordered_targets = df_window['TargetTime'].drop_duplicates().tolist()
 
-    for _, market_group in df_window.groupby('TargetTime', sort=False):
-        market_group = market_group.sort_values(time_column)
+    for idx, target_time in enumerate(ordered_targets):
+        market_group = df_window[df_window['TargetTime'] == target_time].sort_values(time_column)
         if market_group.empty:
             continue
         market_open = market_group[time_column].iloc[0]
@@ -612,7 +613,8 @@ if df is not None and not df.empty:
             )
             market_end_time = market_open + pd.Timedelta(minutes=15)
             market_close_time = market_group[time_column].iloc[-1]
-            if market_close_time < market_end_time:
+            market_closed = idx < len(ordered_targets) - 1 or market_close_time >= market_end_time
+            if not market_closed:
                 continue
             final_up, final_down = _get_close_prices(market_group, time_column)
             if pd.isna(final_up) or pd.isna(final_down):
@@ -680,7 +682,7 @@ if df is not None and not df.empty:
     else:
         target_order = df_window['TargetTime_dt'].dropna().drop_duplicates().tolist()
 
-    for target_time in target_order:
+    for idx, target_time in enumerate(target_order):
         market_group = df_window[df_window['TargetTime_dt'] == target_time].sort_values(time_column)
         if market_group.empty:
             continue
@@ -713,7 +715,8 @@ if df is not None and not df.empty:
         final_up, final_down = _get_close_prices(market_group, time_column)
 
         outcome = "Pending"
-        if market_close_time >= market_end_time and expected_side:
+        market_closed = idx < len(target_order) - 1 or market_close_time >= market_end_time
+        if market_closed and expected_side:
             if pd.isna(final_up) or pd.isna(final_down):
                 outcome = "N/A"
             elif final_up == final_down:
