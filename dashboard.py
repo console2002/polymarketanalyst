@@ -432,8 +432,10 @@ if df is not None and not df.empty:
 
     trace_mode = "lines+markers" if show_markers else "lines"
     colors = {
-        "up": "rgba(34, 139, 34, 0.7)",
-        "down": "rgba(220, 20, 60, 0.5)",
+        "up": "rgba(34, 139, 34, 0.75)",
+        "down": "rgba(220, 20, 60, 0.65)",
+        "up_liquidity": "rgba(34, 139, 34, 0.9)",
+        "down_liquidity": "rgba(220, 20, 60, 0.85)",
         "imbalance": "rgba(128, 0, 128, 0.55)",
         "share": "rgba(255, 165, 0, 0.85)",
         "momentum": "rgba(30, 144, 255, 0.7)",
@@ -501,7 +503,7 @@ if df is not None and not df.empty:
             x=df_chart[time_column],
             y=df_chart['UpVol'],
             name="Yes (Up) Liquidity",
-            marker_color=colors["up"],
+            marker_color=colors["up_liquidity"],
             customdata=liquidity_customdata,
             hovertemplate=liquidity_hover,
         ),
@@ -513,7 +515,7 @@ if df is not None and not df.empty:
             x=df_chart[time_column],
             y=df_chart['DownVol'],
             name="No (Down) Liquidity",
-            marker_color=colors["down"],
+            marker_color=colors["down_liquidity"],
             customdata=liquidity_customdata,
             hovertemplate=liquidity_hover,
         ),
@@ -562,6 +564,9 @@ if df is not None and not df.empty:
     probability_threshold = float(entry_threshold)
     expected_winner_traces = []
     ordered_targets = df_window['TargetTime'].drop_duplicates().tolist()
+    full_target_order = df['TargetTime'].drop_duplicates().tolist()
+    full_target_indices = {target: idx for idx, target in enumerate(full_target_order)}
+    full_last_target_index = len(full_target_order) - 1
 
     for idx, target_time in enumerate(ordered_targets):
         market_group = df_window[df_window['TargetTime'] == target_time].sort_values(time_column)
@@ -613,7 +618,11 @@ if df is not None and not df.empty:
             )
             market_end_time = market_open + pd.Timedelta(minutes=15)
             market_close_time = market_group[time_column].iloc[-1]
-            market_closed = idx < len(ordered_targets) - 1 or market_close_time >= market_end_time
+            full_index = full_target_indices.get(target_time)
+            market_closed = (
+                (full_index is not None and full_index < full_last_target_index)
+                or market_close_time >= market_end_time
+            )
             if not market_closed:
                 continue
             final_up, final_down = _get_close_prices(market_group, time_column)
@@ -681,6 +690,9 @@ if df is not None and not df.empty:
         target_order = active_targets
     else:
         target_order = df_window['TargetTime_dt'].dropna().drop_duplicates().tolist()
+    full_target_dt_order = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
+    full_target_dt_indices = {target: idx for idx, target in enumerate(full_target_dt_order)}
+    full_last_target_dt_index = len(full_target_dt_order) - 1
 
     for idx, target_time in enumerate(target_order):
         market_group = df_window[df_window['TargetTime_dt'] == target_time].sort_values(time_column)
@@ -715,7 +727,11 @@ if df is not None and not df.empty:
         final_up, final_down = _get_close_prices(market_group, time_column)
 
         outcome = "Pending"
-        market_closed = idx < len(target_order) - 1 or market_close_time >= market_end_time
+        full_index = full_target_dt_indices.get(target_time)
+        market_closed = (
+            (full_index is not None and full_index < full_last_target_dt_index)
+            or market_close_time >= market_end_time
+        )
         if market_closed and expected_side:
             if pd.isna(final_up) or pd.isna(final_down):
                 outcome = "N/A"
