@@ -90,14 +90,6 @@ entry_threshold = st.sidebar.number_input(
     step=0.01,
     format="%.2f",
 )
-win_threshold = st.sidebar.number_input(
-    "Win threshold",
-    min_value=0.0,
-    max_value=1.0,
-    value=0.99,
-    step=0.01,
-    format="%.2f",
-)
 resample_interval = st.sidebar.selectbox(
     "Resample interval",
     options=("5s", "15s", "30s", "60s"),
@@ -144,6 +136,12 @@ def load_data(selected_date, files_by_date, legacy_path):
         df['Timestamp'] = pd.to_datetime(df['Timestamp'], format=TIME_FORMAT)
         if 'Timestamp_UK' in df.columns:
             df['Timestamp_UK'] = pd.to_datetime(df['Timestamp_UK'], format=TIME_FORMAT)
+        for column in ("UpPrice", "DownPrice"):
+            if column in df.columns:
+                df[column] = pd.to_numeric(df[column], errors="coerce")
+        for column in ("UpVol", "DownVol"):
+            if column in df.columns:
+                df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
         return df, resolved_date
     except FileNotFoundError:
         return None, None
@@ -209,6 +207,30 @@ def _format_metric(value, formatter):
         return formatter(value)
     except (TypeError, ValueError):
         return "N/A"
+
+
+def _last_non_zero(series):
+    cleaned = series.replace(0, np.nan).dropna()
+    if cleaned.empty:
+        return np.nan
+    return cleaned.iloc[-1]
+
+
+def _get_close_prices(market_group, time_column):
+    market_group = market_group.sort_values(time_column)
+    last_row = market_group.iloc[-1]
+    last_up = last_row.get("UpPrice", np.nan)
+    last_down = last_row.get("DownPrice", np.nan)
+    both_zero = (pd.isna(last_up) or last_up == 0) and (pd.isna(last_down) or last_down == 0)
+    if both_zero:
+        last_up = _last_non_zero(market_group["UpPrice"])
+        last_down = _last_non_zero(market_group["DownPrice"])
+    else:
+        if pd.isna(last_up):
+            last_up = _last_non_zero(market_group["UpPrice"])
+        if pd.isna(last_down):
+            last_down = _last_non_zero(market_group["DownPrice"])
+    return last_up, last_down
 
 df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
 if selected_date and resolved_date and selected_date != resolved_date:
@@ -588,19 +610,28 @@ if df is not None and not df.empty:
                     showlegend=False,
                 )
             )
-            final_up_values = market_group['UpPrice'].replace(0, np.nan).dropna()
-            final_down_values = market_group['DownPrice'].replace(0, np.nan).dropna()
-            if final_up_values.empty or final_down_values.empty:
+            market_end_time = market_open + pd.Timedelta(minutes=15)
+            market_close_time = market_group[time_column].iloc[-1]
+            if market_close_time < market_end_time:
                 continue
-            final_up = final_up_values.iloc[-1]
-            final_down = final_down_values.iloc[-1]
-            win = final_up >= win_threshold if expected_side == "up" else final_down >= win_threshold
+            final_up, final_down = _get_close_prices(market_group, time_column)
+            if pd.isna(final_up) or pd.isna(final_down):
+                continue
+            if final_up == final_down:
+                outcome_text = "Tie"
+                outcome_color = "#808080"
+            elif expected_side == "up":
+                outcome_text = "Win" if final_up > final_down else "Lose"
+                outcome_color = "#00AA00" if outcome_text == "Win" else "#FF0000"
+            else:
+                outcome_text = "Win" if final_down > final_up else "Lose"
+                outcome_color = "#00AA00" if outcome_text == "Win" else "#FF0000"
             fig.add_annotation(
-                x=market_group[time_column].iloc[-1],
+                x=market_close_time,
                 y=1.03,
-                text="Win" if win else "Lose",
+                text=outcome_text,
                 showarrow=False,
-                font=dict(color="#00AA00" if win else "#FF0000", size=16),
+                font=dict(color=outcome_color, size=16),
                 row=1,
                 col=1,
             )
@@ -677,16 +708,20 @@ if df is not None and not df.empty:
             if candidates:
                 expected_side, cross_time, cross_value = min(candidates, key=lambda item: item[1])
 
-        final_up_values = market_group['UpPrice'].replace(0, np.nan).dropna()
-        final_down_values = market_group['DownPrice'].replace(0, np.nan).dropna()
-        final_up = final_up_values.iloc[-1] if not final_up_values.empty else np.nan
-        final_down = final_down_values.iloc[-1] if not final_down_values.empty else np.nan
+        market_end_time = market_open + pd.Timedelta(minutes=15)
+        market_close_time = market_group[time_column].iloc[-1]
+        final_up, final_down = _get_close_prices(market_group, time_column)
 
-        outcome = "N/A"
-        if expected_side == "Up" and pd.notna(final_up):
-            outcome = "Win" if final_up >= win_threshold else "Lose"
-        elif expected_side == "Down" and pd.notna(final_down):
-            outcome = "Win" if final_down >= win_threshold else "Lose"
+        outcome = "Pending"
+        if market_close_time >= market_end_time and expected_side:
+            if pd.isna(final_up) or pd.isna(final_down):
+                outcome = "N/A"
+            elif final_up == final_down:
+                outcome = "Tie"
+            elif expected_side == "Up":
+                outcome = "Win" if final_up > final_down else "Lose"
+            elif expected_side == "Down":
+                outcome = "Win" if final_down > final_up else "Lose"
 
         total_liq_series = market_group['UpVol'] + market_group['DownVol']
         up_price_series = market_group['UpPrice'].replace(0, np.nan)
