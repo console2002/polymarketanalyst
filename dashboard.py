@@ -326,10 +326,6 @@ if df is not None and not df.empty:
         np.nan,
     )
     
-    # Treat 0 prices as gaps
-    df_chart.loc[df_chart['UpPrice'] == 0, 'UpPrice'] = np.nan
-    df_chart.loc[df_chart['DownPrice'] == 0, 'DownPrice'] = np.nan
-
     df_chart["liq_imbalance_volume"] = df_chart["UpVol"] - df_chart["DownVol"]
     df_chart["liq_share"] = np.where(
         df_chart["total_liq"] > 0,
