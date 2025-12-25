@@ -159,7 +159,7 @@ min_available_date = min(available_dates) if available_dates else None
 
 col_top1, col_top2 = st.columns(2)
 with col_top1:
-    if st.button('Refresh Data', key='refresh_data_button', use_container_width=True):
+    if st.button('Refresh Data', key='refresh_data_button', width='stretch'):
         st.rerun()
     auto_refresh = st.checkbox("Auto-refresh", value=True)
 with col_top2:
@@ -639,7 +639,7 @@ if df is not None and not df.empty:
     # Enable crosshair (spike lines) across both subplots
     fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
     
-    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+    st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
 
     summary_rows = []
     probability_threshold = float(entry_threshold)
@@ -709,7 +709,7 @@ if df is not None and not df.empty:
 
     with st.expander("Window summary"):
         summary_df = pd.DataFrame(summary_rows)
-        st.dataframe(summary_df, use_container_width=True)
+        st.dataframe(summary_df, width='stretch')
     
     st.caption(f"Last updated: {latest['Timestamp']}")
 
