@@ -60,12 +60,6 @@ def _resolve_data_file(selected_date, files_by_date, legacy_path):
 st.set_page_config(page_title="Polymarket BTC Monitor", layout="wide")
 
 st.sidebar.header("Analysis Controls")
-smoothing_window = st.sidebar.selectbox(
-    "Derivative smoothing window (moving average)",
-    options=list(range(1, 31)),
-    index=0,
-    help="Set the window size for the moving average applied to the derivative to smooth out zig-zag. A value of 1 means no smoothing.",
-)
 lookback_period = st.sidebar.number_input(
     "Lookback period (markets)",
     min_value=1,
@@ -321,34 +315,19 @@ if df is not None and not df.empty:
     df_chart.loc[df_chart['UpPrice'] == 0, 'UpPrice'] = np.nan
     df_chart.loc[df_chart['DownPrice'] == 0, 'DownPrice'] = np.nan
 
-    # Calculate numerical derivative of UpPrice
-    # Calculate diff only within each group (market segment)
-    df_chart['UpPrice_diff'] = df_chart.groupby('group')['UpPrice'].diff()
-    df_chart['Timestamp_diff_seconds'] = df_chart.groupby('group')[time_column].diff().dt.total_seconds()
-    
-    # Avoid division by zero and handle cases where Timestamp_diff_seconds might be 0 or NaN
-    df_chart['UpPrice_Derivative'] = df_chart['UpPrice_diff'] / df_chart['Timestamp_diff_seconds']
-    # Filter out infinite values that might result from division by very small numbers close to zero
-    df_chart.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df_chart["liq_imbalance_volume"] = df_chart["UpVol"] - df_chart["DownVol"]
+    df_chart["liq_share"] = np.where(
+        df_chart["total_liq"] > 0,
+        df_chart["UpVol"] / df_chart["total_liq"],
+        np.nan,
+    )
 
-    # Apply moving average to smooth the derivative
-    # Using .transform() with apply allows for grouping and then rejoining the result to the original DataFrame
-    if smoothing_window > 1:
-        df_chart['UpPrice_Derivative'] = df_chart.groupby('group')['UpPrice_Derivative'].transform(
-            lambda x: x.rolling(window=smoothing_window, min_periods=1, center=True).mean()
-        )
+    interval_seconds = pd.Timedelta(resample_interval).total_seconds()
+    momentum_window_points = max(1, int(momentum_window_seconds / interval_seconds))
 
-    def _rolling_momentum(group):
-        group = group.sort_values(time_column)
-        rolling_values = (
-            group.set_index(time_column)['UpPrice_Derivative']
-            .rolling(f"{int(momentum_window_seconds)}s", min_periods=1)
-            .mean()
-        )
-        return rolling_values.reset_index(drop=True)
-
-    df_chart['UpPrice_Momentum'] = df_chart.groupby('group', sort=False, group_keys=False).apply(
-        _rolling_momentum
+    df_chart["UpPrice_Momentum"] = (
+        df_chart.groupby("group")["UpPrice"]
+        .transform(lambda x: x.diff().rolling(momentum_window_points, min_periods=1).mean())
     )
 
     col1, col2, col3, col4 = st.columns(4)
@@ -399,14 +378,24 @@ if df is not None and not df.empty:
     colors = {
         "up": "rgba(34, 139, 34, 0.7)",
         "down": "rgba(220, 20, 60, 0.5)",
-        "derivative": "rgba(255, 165, 0, 0.7)",
+        "imbalance": "rgba(128, 0, 128, 0.55)",
+        "share": "rgba(255, 165, 0, 0.85)",
         "momentum": "rgba(30, 144, 255, 0.7)",
     }
 
     # Create Subplots with shared x-axis
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.1,
-                        subplot_titles=("Probability History", "Liquidity (available size at quoted price)", "Up Price Derivative/Momentum"))
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        specs=[[{}], [{}], [{"secondary_y": True}]],
+        subplot_titles=(
+            "Probability History",
+            "Liquidity (available size at quoted price)",
+            "Liquidity Imbalance / Share",
+        ),
+    )
 
     # Probability Chart (Row 1)
     fig.add_trace(
@@ -476,28 +465,41 @@ if df is not None and not df.empty:
         col=1,
     )
 
-    # Derivative Chart (Row 3)
+    # Liquidity Imbalance/Share Chart (Row 3)
     fig.add_trace(
-        go.Scatter(
+        go.Bar(
             x=df_chart[time_column],
-            y=df_chart['UpPrice_Derivative'],
-            name="Up Price Derivative",
-            line=dict(color=colors["derivative"], width=2),
-            mode=trace_mode,
+            y=df_chart["liq_imbalance_volume"],
+            name="Liquidity Imbalance (Up - Down)",
+            marker_color=colors["imbalance"],
         ),
         row=3,
         col=1,
+        secondary_y=False,
     )
     fig.add_trace(
         go.Scatter(
             x=df_chart[time_column],
-            y=df_chart['UpPrice_Momentum'],
+            y=df_chart["liq_share"],
+            name="Up Liquidity Share",
+            line=dict(color=colors["share"], width=2),
+            mode=trace_mode,
+        ),
+        row=3,
+        col=1,
+        secondary_y=True,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df_chart[time_column],
+            y=df_chart["UpPrice_Momentum"],
             name="Up Price Momentum",
             line=dict(color=colors["momentum"], width=2, dash="dot"),
             mode=trace_mode,
         ),
         row=3,
         col=1,
+        secondary_y=True,
     )
 
     minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
@@ -585,7 +587,8 @@ if df is not None and not df.empty:
         xaxis_title="Time",
         yaxis=dict(title="Probability", range=[0, 1.05]),
         yaxis2=dict(title="Liquidity (available size at quoted price)", type=liquidity_y_scale),
-        yaxis3=dict(title="Rate of Change"),
+        yaxis3=dict(title="Liquidity Imbalance (Up - Down)", zeroline=True),
+        yaxis4=dict(title="Up Liquidity Share / Momentum"),
         barmode=liquidity_bar_mode,
         xaxis=dict(rangeslider=dict(visible=False), type="date"),
         xaxis2=dict(rangeslider=dict(visible=False), type="date"),
