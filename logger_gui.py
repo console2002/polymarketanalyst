@@ -25,6 +25,7 @@ from get_current_markets import get_available_market_urls, get_current_market_ur
 DEFAULT_WS_URL = "ws://127.0.0.1:8765"
 LAUNCH_LOG_MAX_LINES = 20
 STREAM_INACTIVE_THRESHOLD_SECONDS = 20
+LOGGER_PID_FILE = os.path.join(os.path.dirname(__file__), "data_logger_ui.pid")
 
 
 def _listener_worker(url, out_queue, stop_event):
@@ -174,6 +175,40 @@ def _get_logger_process():
     return proc
 
 
+def _read_logger_pid():
+    if not os.path.exists(LOGGER_PID_FILE):
+        return None
+    try:
+        with open(LOGGER_PID_FILE, "r", encoding="utf-8") as handle:
+            raw = handle.read().strip()
+        return int(raw)
+    except (OSError, ValueError):
+        return None
+
+
+def _is_pid_running(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _stop_logger_pid(pid):
+    if not pid:
+        return False, "No PID available for stop request."
+    try:
+        if os.name == "nt":
+            os.kill(pid, signal.SIGTERM)
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except OSError as exc:
+        return False, f"Failed to stop logger PID {pid}: {exc}"
+    return True, f"Stop signal sent to PID {pid}."
+
+
 def _parse_ws_target(ws_url):
     parsed = urlparse(ws_url)
     host = parsed.hostname or "127.0.0.1"
@@ -318,7 +353,15 @@ if not can_manage_logger:
     st.sidebar.info("Start/Stop is available only for local ws:// endpoints.")
 
 endpoint_active = can_manage_logger and _is_ws_endpoint_active(ws_url)
-logger_already_running = endpoint_active and not logger_running
+logger_pid = _read_logger_pid()
+logger_pid_running = _is_pid_running(logger_pid)
+if logger_pid and not logger_pid_running:
+    try:
+        os.remove(LOGGER_PID_FILE)
+    except OSError:
+        pass
+    logger_pid = None
+logger_already_running = endpoint_active and not logger_running and logger_pid_running
 if logger_already_running:
     st.sidebar.warning("Logger already running")
 
@@ -329,7 +372,7 @@ start_clicked = st.sidebar.button(
 )
 stop_clicked = st.sidebar.button(
     "Stop Logger",
-    disabled=not logger_running,
+    disabled=not (logger_running or logger_pid_running),
     help="Send a stop signal for a graceful shutdown.",
 )
 if start_clicked and not logger_running and can_manage_logger:
@@ -376,6 +419,15 @@ if stop_clicked and logger_running:
         st.session_state.logger_error = f"Unable to stop logger process: {exc}"
         st.sidebar.error(st.session_state.logger_error)
         _append_launch_log(f"Stop signal failed: {exc}")
+elif stop_clicked and logger_pid_running:
+    ok, message = _stop_logger_pid(logger_pid)
+    if ok:
+        st.sidebar.info(message)
+        _append_launch_log(message)
+    else:
+        st.session_state.logger_error = message
+        st.sidebar.error(st.session_state.logger_error)
+        _append_launch_log(message)
 
 if st.session_state.get("logger_error"):
     st.sidebar.error(st.session_state.logger_error)
@@ -460,6 +512,8 @@ else:
     st.sidebar.warning(f"Status: {status_label} (no recent stream activity)")
 if logger_running:
     st.sidebar.caption(f"Local logger process: running (PID {logger_proc.pid})")
+elif logger_pid_running:
+    st.sidebar.caption(f"Local logger process: running (PID {logger_pid})")
 else:
     st.sidebar.caption("Local logger process: not running")
 
