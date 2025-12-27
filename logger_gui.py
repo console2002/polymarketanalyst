@@ -1,3 +1,9 @@
+"""Read-only GUI for the Polymarket logger.
+
+Run this in a separate process from the logger. It only consumes the logger's
+WebSocket stream and never calls into logger code paths.
+"""
+
 import asyncio
 import json
 import queue
@@ -81,6 +87,9 @@ def _format_market_label(market):
 st.set_page_config(page_title="Polymarket Logger GUI", layout="wide")
 
 st.sidebar.header("Logger GUI")
+st.sidebar.caption(
+    "Read-only consumer. Updates are best-effort and may skip under load to keep the logger fast."
+)
 ws_url = st.sidebar.text_input("WebSocket URL", value=DEFAULT_WS_URL)
 auto_refresh = st.sidebar.checkbox("Auto-refresh", value=True)
 refresh_interval = st.sidebar.number_input(
