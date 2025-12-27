@@ -30,6 +30,7 @@ TIMEZONE_UK = pytz.timezone("Europe/London")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
 SCRIPT_DIR = os.path.dirname(__file__)
+PID_FILE = os.path.join(SCRIPT_DIR, "data_logger_ui.pid")
 CSV_HEADERS = [
     "timestamp_et",
     "timestamp_uk",
@@ -115,25 +116,42 @@ class LoggerStreamBroadcaster:
         self._shutdown = asyncio.Event()
 
     async def start(self):
-        try:
-            self._server = await websockets.serve(
-                self._handle_client,
-                self.host,
-                self.port,
-                process_request=self._process_request,
-                reuse_address=True,
-            )
-        except OSError as exc:
-            if exc.errno in {98, 10048}:
-                print(
-                    "UI stream unavailable: could not bind to "
-                    f"ws://{self.host}:{self.port} (address already in use). "
-                    "Another logger may still be running, or the socket has not been "
-                    "released yet. Use --ui-stream-port to pick a different port."
+        for attempt in range(2):
+            try:
+                self._server = await websockets.serve(
+                    self._handle_client,
+                    self.host,
+                    self.port,
+                    process_request=self._process_request,
+                    reuse_address=True,
                 )
-                return False
-            raise
+                break
+            except OSError as exc:
+                if exc.errno in {98, 10048, 10013} and attempt == 0:
+                    if self._terminate_existing_pid():
+                        await asyncio.sleep(0.5)
+                        continue
+                if exc.errno in {98, 10048}:
+                    print(
+                        "UI stream unavailable: could not bind to "
+                        f"ws://{self.host}:{self.port} (address already in use). "
+                        "Another logger may still be running, or the socket has not been "
+                        "released yet. The UI stream will remain disabled."
+                    )
+                    return False
+                if exc.errno in {10013}:
+                    print(
+                        "UI stream unavailable: could not bind to "
+                        f"ws://{self.host}:{self.port} (permission denied). "
+                        "Windows may block binding to this port. The UI stream will "
+                        "remain disabled."
+                    )
+                    return False
+                raise
+        if not self._server:
+            return False
         self._task = asyncio.create_task(self._broadcast_loop())
+        self._write_pid()
         print(f"UI stream available at ws://{self.host}:{self.port}")
         return True
 
@@ -146,6 +164,7 @@ class LoggerStreamBroadcaster:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
+        self._remove_pid()
 
     def publish(self, payload):
         """Queue payloads for UI consumers without blocking the logger."""
@@ -206,6 +225,44 @@ class LoggerStreamBroadcaster:
         except (asyncio.TimeoutError, Exception):
             return False
         return True
+
+    def _read_pid(self):
+        if not os.path.exists(PID_FILE):
+            return None
+        try:
+            with open(PID_FILE, "r", encoding="utf-8") as handle:
+                raw = handle.read().strip()
+            return int(raw)
+        except (OSError, ValueError):
+            return None
+
+    def _write_pid(self):
+        try:
+            with open(PID_FILE, "w", encoding="utf-8") as handle:
+                handle.write(str(os.getpid()))
+        except OSError:
+            pass
+
+    def _remove_pid(self):
+        try:
+            os.remove(PID_FILE)
+        except OSError:
+            pass
+
+    def _terminate_existing_pid(self):
+        pid = self._read_pid()
+        if not pid:
+            return False
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            self._remove_pid()
+            return False
+        try:
+            os.kill(pid, signal.SIGTERM)
+            return True
+        except OSError:
+            return False
 
 
 class PriceAggregator:
