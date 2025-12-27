@@ -58,12 +58,15 @@ def _ensure_listener(url):
     st.session_state.listener_url = url
     st.session_state.last_rows = []
     st.session_state.last_update = None
+    st.session_state.rolling_rows = []
 
 
 def _drain_messages():
     out_queue = st.session_state.listener_queue
     latest_rows = None
     latest_update = None
+    rolling_rows = st.session_state.get("rolling_rows", [])
+    max_rows = st.session_state.get("buffer_size", 100)
     while True:
         try:
             message = out_queue.get_nowait()
@@ -77,9 +80,25 @@ def _drain_messages():
         if rows:
             latest_rows = rows
             latest_update = payload.get("timestamp")
+            for row in rows:
+                rolling_rows.append(
+                    {
+                        "timestamp": latest_update,
+                        "outcome": row.get("outcome"),
+                        "best_bid": row.get("best_bid"),
+                        "best_ask": row.get("best_ask"),
+                        "mid": row.get("mid"),
+                        "last_trade": row.get("last_trade_price"),
+                        "stale": row.get("is_stale"),
+                    }
+                )
     if latest_rows is not None:
         st.session_state.last_rows = latest_rows
         st.session_state.last_update = latest_update
+    if rolling_rows:
+        st.session_state.rolling_rows = rolling_rows[-max_rows:]
+    else:
+        st.session_state.rolling_rows = []
 
 
 def _format_market_label(market):
@@ -173,6 +192,14 @@ refresh_interval = st.sidebar.number_input(
     value=1.0,
     step=0.5,
 )
+buffer_size = st.sidebar.slider(
+    "Rolling buffer size (rows)",
+    min_value=50,
+    max_value=200,
+    value=100,
+    step=10,
+)
+st.session_state.buffer_size = buffer_size
 st.sidebar.subheader("Market Selection")
 market_options = get_available_market_urls()
 current_market = get_current_market_urls()
@@ -216,11 +243,18 @@ else:
     st.caption("Waiting for updates from the logger...")
 
 rows = st.session_state.last_rows
-if rows:
-    df = pd.DataFrame(rows)
-    st.subheader("Latest Rows")
-    st.dataframe(df, use_container_width=True)
+rolling_rows = st.session_state.get("rolling_rows", [])
+if rolling_rows:
+    table_columns = ["timestamp", "outcome", "best_bid", "best_ask", "mid", "last_trade", "stale"]
+    table_df = pd.DataFrame(rolling_rows).reindex(columns=table_columns)
+    st.subheader("Latest Logged Entries")
+    st.dataframe(
+        table_df,
+        use_container_width=True,
+        hide_index=True,
+    )
 
+if rows:
     st.subheader("Latest Values")
     metric_cols = st.columns(len(rows))
     for idx, row in enumerate(rows):
