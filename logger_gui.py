@@ -6,10 +6,15 @@ WebSocket stream and never calls into logger code paths.
 
 import asyncio
 import json
+import os
 import queue
+import signal
+import subprocess
+import sys
 import threading
 import time
 from datetime import datetime
+from urllib.parse import urlparse
 
 import pandas as pd
 import streamlit as st
@@ -84,6 +89,41 @@ def _format_market_label(market):
     return f"{start_et:%b %d %I:%M %p ET} → {expiration_utc:%H:%M UTC} ({slug})"
 
 
+def _get_logger_process():
+    proc = st.session_state.get("logger_process")
+    if proc and proc.poll() is not None:
+        st.session_state.logger_process = None
+        return None
+    return proc
+
+
+def _parse_ws_target(ws_url):
+    parsed = urlparse(ws_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 8765
+    scheme = parsed.scheme or "ws"
+    return scheme, host, port
+
+
+def _start_logger_process(host, port):
+    logger_path = os.path.join(os.path.dirname(__file__), "data_logger.py")
+    command = [
+        sys.executable,
+        logger_path,
+        "--ui-stream",
+        "--ui-stream-host",
+        host,
+        "--ui-stream-port",
+        str(port),
+    ]
+    return subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 st.set_page_config(page_title="Polymarket Logger GUI", layout="wide")
 
 st.sidebar.header("Logger GUI")
@@ -91,6 +131,40 @@ st.sidebar.caption(
     "Read-only consumer. Updates are best-effort and may skip under load to keep the logger fast."
 )
 ws_url = st.sidebar.text_input("WebSocket URL", value=DEFAULT_WS_URL)
+scheme, host, port = _parse_ws_target(ws_url)
+logger_proc = _get_logger_process()
+logger_running = logger_proc is not None
+can_manage_logger = scheme in {"ws", ""} and host in {"127.0.0.1", "localhost"}
+st.sidebar.subheader("Logger Control")
+if not can_manage_logger:
+    st.sidebar.info("Start/Stop is available only for local ws:// endpoints.")
+
+start_clicked = st.sidebar.button(
+    "Start Logger",
+    disabled=logger_running or not can_manage_logger,
+    help="Launch data_logger.py in a background process with UI streaming enabled.",
+)
+stop_clicked = st.sidebar.button(
+    "Stop Logger",
+    disabled=not logger_running,
+    help="Send SIGINT for a graceful shutdown.",
+)
+if start_clicked and not logger_running and can_manage_logger:
+    logger_proc = _start_logger_process(host, port)
+    st.session_state.logger_process = logger_proc
+    logger_running = True
+    st.sidebar.success("Logger process started.")
+if stop_clicked and logger_running:
+    logger_proc.send_signal(signal.SIGINT)
+    logger_running = False
+    st.sidebar.info("Stop signal sent to logger.")
+
+status_label = "Running" if logger_running else "Stopped"
+if logger_running:
+    st.sidebar.success(f"Status: {status_label} (PID {logger_proc.pid})")
+else:
+    st.sidebar.warning(f"Status: {status_label}")
+
 auto_refresh = st.sidebar.checkbox("Auto-refresh", value=True)
 refresh_interval = st.sidebar.number_input(
     "Refresh interval (seconds)",
@@ -133,6 +207,7 @@ _ensure_listener(ws_url)
 _drain_messages()
 
 st.title("Live Logger Feed")
+st.caption(f"Logger status: {'Running' if logger_running else 'Stopped'}")
 st.caption(f"GUI Market: {selected_market['polymarket']}")
 last_update = st.session_state.last_update
 if last_update:
