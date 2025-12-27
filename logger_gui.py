@@ -26,6 +26,7 @@ DEFAULT_WS_URL = "ws://127.0.0.1:8765"
 LAUNCH_LOG_MAX_LINES = 20
 STREAM_INACTIVE_THRESHOLD_SECONDS = 20
 LOGGER_PID_FILE = os.path.join(os.path.dirname(__file__), "data_logger_ui.pid")
+_LOGGER_PROCESS = None
 
 
 def _listener_worker(url, out_queue, stop_event):
@@ -168,9 +169,10 @@ def _format_market_label(market):
 
 
 def _get_logger_process():
-    proc = st.session_state.get("logger_process")
+    global _LOGGER_PROCESS
+    proc = _LOGGER_PROCESS
     if proc and proc.poll() is not None:
-        st.session_state.logger_process = None
+        _LOGGER_PROCESS = None
         return None
     return proc
 
@@ -184,6 +186,16 @@ def _read_logger_pid():
         return int(raw)
     except (OSError, ValueError):
         return None
+
+
+def _write_logger_pid(pid):
+    if not pid:
+        return
+    try:
+        with open(LOGGER_PID_FILE, "w", encoding="utf-8") as handle:
+            handle.write(str(pid))
+    except OSError:
+        pass
 
 
 def _is_pid_running(pid):
@@ -397,8 +409,9 @@ if start_clicked and not logger_running and can_manage_logger:
         logger_proc = None
         logger_running = False
     elif logger_proc and logger_proc.poll() is None:
-        st.session_state.logger_process = logger_proc
+        _LOGGER_PROCESS = logger_proc
         logger_running = True
+        _write_logger_pid(logger_proc.pid)
         st.sidebar.success("Logger process started.")
         _append_launch_log("Logger start succeeded.")
     else:
@@ -420,7 +433,7 @@ if stop_clicked and logger_running:
                 logger_proc.terminate()
                 stopped = _wait_for_logger_exit(logger_proc, timeout=2)
             if stopped:
-                st.session_state.logger_process = None
+                _LOGGER_PROCESS = None
                 logger_running = False
             st.sidebar.info("Logger stop requested.")
             _append_launch_log("Logger stop requested.")
