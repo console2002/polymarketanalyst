@@ -98,6 +98,9 @@ class PriceAggregator:
         self.last_logged = {}
         self.last_log_time = None
         self.outcome_order = market_info.get("outcomes") or []
+        self._current_file_path = None
+        self._current_file_handle = None
+        self._current_writer = None
 
     async def handle_update(self, update):
         outcome = update["outcome"]
@@ -142,6 +145,7 @@ class PriceAggregator:
         down_update = self.latest[down_key]
         up_is_stale, up_stale_age = self._stale_info(up_update, timestamp_dt)
         down_is_stale, down_stale_age = self._stale_info(down_update, timestamp_dt)
+        event_timestamp = self._event_timestamp(up_update, down_update, timestamp_dt)
 
         timestamp_et = _format_timestamp(timestamp_dt, TIMEZONE_ET)
         timestamp_uk = _format_timestamp(timestamp_dt, TIMEZONE_UK)
@@ -191,11 +195,9 @@ class PriceAggregator:
             _format_timestamp_utc(local_time_utc),
         ]
 
-        data_file = _get_data_file(timestamp_dt)
-        _ensure_csv(data_file)
-        with open(data_file, mode="a", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerow(row)
+        data_file = _get_data_file(event_timestamp)
+        writer = self._get_writer(data_file)
+        writer.writerow(row)
 
         self.last_logged = {
             up_key: up_update,
@@ -215,6 +217,23 @@ class PriceAggregator:
         if len(outcomes) >= 2:
             return outcomes[0], outcomes[1]
         return None, None
+
+    def _event_timestamp(self, up_update, down_update, fallback_timestamp):
+        for update in (up_update, down_update):
+            server_time = update.get("server_time_utc")
+            if server_time:
+                return server_time
+        return fallback_timestamp or datetime.datetime.now(pytz.utc)
+
+    def _get_writer(self, data_file):
+        if self._current_file_path != data_file:
+            if self._current_file_handle:
+                self._current_file_handle.close()
+            _ensure_csv(data_file)
+            self._current_file_handle = open(data_file, mode="a", newline="")
+            self._current_file_path = data_file
+            self._current_writer = csv.writer(self._current_file_handle)
+        return self._current_writer
 
     @staticmethod
     def _stale_info(update, timestamp_dt):
