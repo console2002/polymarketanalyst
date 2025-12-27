@@ -101,12 +101,14 @@ class LoggerStreamBroadcaster:
         self,
         host="127.0.0.1",
         port=8765,
+        port_fallback_attempts=5,
         max_queue=1000,
         send_timeout=0.25,
         allowed_origins=None,
     ):
         self.host = host
         self.port = port
+        self.port_fallback_attempts = max(1, int(port_fallback_attempts))
         self.queue = asyncio.Queue(maxsize=max_queue)
         self.send_timeout = send_timeout
         self.allowed_origins = set(allowed_origins) if allowed_origins else None
@@ -117,38 +119,44 @@ class LoggerStreamBroadcaster:
 
     async def start(self):
         for attempt in range(2):
-            try:
-                self._server = await websockets.serve(
-                    self._handle_client,
-                    self.host,
-                    self.port,
-                    process_request=self._process_request,
-                    reuse_address=True,
-                )
-                break
-            except OSError as exc:
-                if exc.errno in {98, 10048, 10013} and attempt == 0:
-                    if self._terminate_existing_pid():
-                        await asyncio.sleep(0.5)
+            if attempt == 0 and self._terminate_existing_pid():
+                await asyncio.sleep(0.5)
+            for offset in range(self.port_fallback_attempts):
+                candidate_port = self.port + offset
+                try:
+                    self._server = await websockets.serve(
+                        self._handle_client,
+                        self.host,
+                        candidate_port,
+                        process_request=self._process_request,
+                        reuse_address=True,
+                    )
+                    self.port = candidate_port
+                    break
+                except OSError as exc:
+                    if exc.errno in {98, 10048}:
+                        print(
+                            "UI stream unavailable: could not bind to "
+                            f"ws://{self.host}:{candidate_port} (address already in use). "
+                            "Another logger may still be running, or the socket has not been "
+                            "released yet."
+                        )
                         continue
-                if exc.errno in {98, 10048}:
-                    print(
-                        "UI stream unavailable: could not bind to "
-                        f"ws://{self.host}:{self.port} (address already in use). "
-                        "Another logger may still be running, or the socket has not been "
-                        "released yet. The UI stream will remain disabled."
-                    )
-                    return False
-                if exc.errno in {10013}:
-                    print(
-                        "UI stream unavailable: could not bind to "
-                        f"ws://{self.host}:{self.port} (permission denied). "
-                        "Windows may block binding to this port. The UI stream will "
-                        "remain disabled."
-                    )
-                    return False
-                raise
+                    if exc.errno in {10013}:
+                        print(
+                            "UI stream unavailable: could not bind to "
+                            f"ws://{self.host}:{candidate_port} (permission denied). "
+                            "Windows may block binding to this port."
+                        )
+                        continue
+                    raise
+            if self._server:
+                break
         if not self._server:
+            print(
+                "UI stream unavailable: could not bind to any configured port "
+                f"starting at {self.host}:{self.port}. The UI stream will remain disabled."
+            )
             return False
         self._task = asyncio.create_task(self._broadcast_loop())
         self._write_pid()
@@ -549,6 +557,15 @@ def main():
         default=8765,
         help="Port for the GUI WebSocket feed.",
     )
+    parser.add_argument(
+        "--ui-stream-port-fallbacks",
+        type=int,
+        default=5,
+        help=(
+            "Number of sequential ports to try if binding fails "
+            "(starting at --ui-stream-port)."
+        ),
+    )
     args = parser.parse_args()
     print("Starting Data Logger...")
     broadcaster = None
@@ -556,6 +573,7 @@ def main():
         broadcaster = LoggerStreamBroadcaster(
             host=args.ui_stream_host,
             port=args.ui_stream_port,
+            port_fallback_attempts=args.ui_stream_port_fallbacks,
         )
     try:
         asyncio.run(_run_with_signals(broadcaster))
