@@ -204,6 +204,11 @@ def _start_logger_process(host, port):
     ]
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    creationflags = 0
+    start_new_session = True
+    if os.name == "nt":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+        start_new_session = False
     try:
         proc = subprocess.Popen(
             command,
@@ -211,7 +216,8 @@ def _start_logger_process(host, port):
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            start_new_session=True,
+            start_new_session=start_new_session,
+            creationflags=creationflags,
             env=env,
         )
     except OSError as exc:
@@ -264,7 +270,7 @@ start_clicked = st.sidebar.button(
 stop_clicked = st.sidebar.button(
     "Stop Logger",
     disabled=not logger_running,
-    help="Send SIGINT for a graceful shutdown.",
+    help="Send a stop signal for a graceful shutdown.",
 )
 if start_clicked and not logger_running and can_manage_logger:
     st.session_state.logger_error = None
@@ -289,10 +295,20 @@ if start_clicked and not logger_running and can_manage_logger:
         logger_proc = None
         logger_running = False
 if stop_clicked and logger_running:
-    logger_proc.send_signal(signal.SIGINT)
-    logger_running = False
-    st.sidebar.info("Stop signal sent to logger.")
-    _append_launch_log("Stop signal sent to logger.")
+    try:
+        if os.name == "nt":
+            if hasattr(signal, "CTRL_BREAK_EVENT"):
+                logger_proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                logger_proc.terminate()
+        else:
+            logger_proc.send_signal(signal.SIGINT)
+        logger_running = False
+        st.sidebar.info("Stop signal sent to logger.")
+        _append_launch_log("Stop signal sent to logger.")
+    except Exception as exc:
+        st.session_state.logger_error = f"Unable to stop logger process: {exc}"
+        _append_launch_log(f"Stop signal failed: {exc}")
 
 if st.session_state.get("logger_error"):
     st.sidebar.error(st.session_state.logger_error)
