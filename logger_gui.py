@@ -25,6 +25,7 @@ from get_current_markets import get_available_market_urls, get_current_market_ur
 
 DEFAULT_WS_URL = "ws://127.0.0.1:8765"
 LAUNCH_LOG_MAX_LINES = 20
+STREAM_INACTIVE_THRESHOLD_SECONDS = 20
 
 
 def _listener_worker(url, out_queue, stop_event):
@@ -60,6 +61,7 @@ def _ensure_listener(url):
     st.session_state.listener_url = url
     st.session_state.last_rows = []
     st.session_state.last_update = None
+    st.session_state.last_message_time = None
     st.session_state.rolling_rows = []
 
 
@@ -94,12 +96,14 @@ def _drain_messages():
     latest_rows = None
     latest_update = None
     rolling_rows = st.session_state.get("rolling_rows", [])
+    last_message_time = st.session_state.get("last_message_time")
     max_rows = st.session_state.get("buffer_size", 100)
     while True:
         try:
             message = out_queue.get_nowait()
         except queue.Empty:
             break
+        last_message_time = datetime.now(timezone.utc)
         try:
             payload = json.loads(message)
         except json.JSONDecodeError:
@@ -127,6 +131,7 @@ def _drain_messages():
     if latest_rows is not None:
         st.session_state.last_rows = latest_rows
         st.session_state.last_update = latest_update
+    st.session_state.last_message_time = last_message_time
     if rolling_rows:
         st.session_state.rolling_rows = rolling_rows[-max_rows:]
     else:
@@ -379,16 +384,18 @@ _drain_messages()
 
 last_update = st.session_state.last_update
 last_update_dt = _parse_last_update(last_update)
+last_message_time = st.session_state.get("last_message_time")
 stream_active = (
-    last_update_dt is not None
-    and (datetime.now(timezone.utc) - last_update_dt).total_seconds() < 15
+    last_message_time is not None
+    and (datetime.now(timezone.utc) - last_message_time).total_seconds()
+    < STREAM_INACTIVE_THRESHOLD_SECONDS
 )
 
-status_label = "Running (stream active)" if stream_active else "Stopped/No data"
+status_label = "Running (stream active)" if stream_active else "Stopped"
 if stream_active:
     st.sidebar.success(f"Status: {status_label}")
 else:
-    st.sidebar.warning(f"Status: {status_label}")
+    st.sidebar.warning(f"Status: {status_label} (no recent stream activity)")
 if logger_running:
     st.sidebar.caption(f"Local logger process: running (PID {logger_proc.pid})")
 else:
