@@ -19,7 +19,7 @@ import pytz
 import websockets
 from websockets.exceptions import InvalidMessage
 
-from fetch_current_polymarket import resolve_current_market
+from fetch_current_polymarket import resolve_current_market, resolve_market_by_expiration
 from websocket_logger import PolymarketWebsocketLogger, STALE_THRESHOLD_SECONDS
 
 LOGGING_INTERVAL_SECONDS = 1
@@ -29,6 +29,7 @@ TIMEZONE_ET = pytz.timezone("US/Eastern")
 TIMEZONE_UK = pytz.timezone("Europe/London")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
+MARKET_DURATION = datetime.timedelta(minutes=15)
 SCRIPT_DIR = os.path.dirname(__file__)
 PID_FILE = os.path.join(SCRIPT_DIR, "data_logger_ui.pid")
 CSV_HEADERS = [
@@ -94,6 +95,14 @@ def _ensure_csv(file_path):
             # Optional fields: last trade details (price/size/side/timestamp).
             writer.writerow(CSV_HEADERS)
         print(f"Created {file_path}")
+
+
+def _ensure_utc(value):
+    if not value:
+        return None
+    if value.tzinfo is None:
+        return pytz.utc.localize(value)
+    return value.astimezone(pytz.utc)
 
 
 class LoggerStreamBroadcaster:
@@ -483,42 +492,81 @@ class PriceAggregator:
 
 
 async def run_logger(broadcaster=None, stop_event=None):
-    market_info, err = resolve_current_market()
-    if err:
-        print(f"Error: {err}")
-        return
-
-    aggregator = PriceAggregator(market_info, broadcaster=broadcaster)
-    _ensure_csv(_get_data_file(datetime.datetime.now(pytz.utc)))
-    ws_logger = PolymarketWebsocketLogger(market_info, aggregator.handle_update)
+    if stop_event is None:
+        stop_event = asyncio.Event()
     if broadcaster:
         started = await broadcaster.start()
         if not started:
             broadcaster = None
-            aggregator._broadcaster = None
-    if stop_event is None:
-        stop_event = asyncio.Event()
-    stop_task = asyncio.create_task(stop_event.wait())
-    logger_task = asyncio.create_task(ws_logger.run())
-    monitor_task = asyncio.create_task(aggregator.monitor_no_updates())
+
+    next_expiration = None
     try:
-        done, _ = await asyncio.wait(
-            [logger_task, stop_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if stop_event.is_set() and logger_task not in done:
-            await ws_logger.shutdown()
-            with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
-                await asyncio.wait_for(logger_task, timeout=5)
+        while not stop_event.is_set():
+            if next_expiration:
+                market_info, err = resolve_market_by_expiration(next_expiration)
+            else:
+                market_info, err = resolve_current_market()
+            if err:
+                print(f"Error: {err}")
+                await asyncio.sleep(STATUS_CHECK_INTERVAL_SECONDS)
+                continue
+
+            now = datetime.datetime.now(pytz.utc)
+            target_time = _ensure_utc(market_info.get("target_time_utc"))
+            expiration = _ensure_utc(market_info.get("expiration_time_utc"))
+            if expiration and now >= expiration:
+                next_expiration = expiration + MARKET_DURATION
+                continue
+            if target_time and now < target_time:
+                next_expiration = target_time
+                continue
+
+            aggregator = PriceAggregator(market_info, broadcaster=broadcaster)
+            _ensure_csv(_get_data_file(now))
+            ws_logger = PolymarketWebsocketLogger(market_info, aggregator.handle_update)
+            stop_task = asyncio.create_task(stop_event.wait())
+            logger_task = asyncio.create_task(ws_logger.run())
+            monitor_task = asyncio.create_task(aggregator.monitor_no_updates())
+            expiry_task = None
+            if expiration:
+                seconds_until_expiry = max(0.0, (expiration - now).total_seconds())
+                expiry_task = asyncio.create_task(asyncio.sleep(seconds_until_expiry))
+
+            try:
+                tasks = [logger_task, stop_task]
+                if expiry_task:
+                    tasks.append(expiry_task)
+                done, _ = await asyncio.wait(
+                    tasks,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if stop_task in done and stop_event.is_set():
+                    await ws_logger.shutdown()
+                    with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                        await asyncio.wait_for(logger_task, timeout=5)
+                    break
+                if expiry_task and expiry_task in done:
+                    await ws_logger.shutdown()
+                    with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                        await asyncio.wait_for(logger_task, timeout=5)
+                    next_expiration = expiration + MARKET_DURATION if expiration else None
+                    continue
+                if logger_task in done:
+                    await ws_logger.shutdown()
+                    with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                        await asyncio.wait_for(logger_task, timeout=5)
+                    next_expiration = expiration
+                    continue
+            finally:
+                stop_task.cancel()
+                monitor_task.cancel()
+                if expiry_task:
+                    expiry_task.cancel()
+                for task in (logger_task, monitor_task, expiry_task):
+                    if task:
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
     finally:
-        stop_task.cancel()
-        monitor_task.cancel()
-        if not logger_task.done():
-            logger_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await logger_task
-        with contextlib.suppress(asyncio.CancelledError):
-            await monitor_task
         if broadcaster:
             await broadcaster.stop()
 

@@ -1,5 +1,6 @@
 import datetime
 import json
+import re
 import time
 from email.utils import parsedate_to_datetime
 
@@ -9,6 +10,7 @@ from requests.exceptions import SSLError
 from urllib3.util.retry import Retry
 
 from get_current_markets import get_current_market_urls
+from find_new_market import generate_market_url
 
 # Configuration
 POLYMARKET_API_URL = "https://gamma-api.polymarket.com/events"
@@ -16,6 +18,7 @@ POLYMARKET_TIMEOUT = (3, 10)
 POLYMARKET_RATE_LIMIT_SECONDS = 1
 _POLYMARKET_SESSION = None
 _LAST_POLYMARKET_CALL_AT = None
+_FIFTEEN_MINUTES = datetime.timedelta(minutes=15)
 
 
 def _get_polymarket_session():
@@ -101,6 +104,21 @@ def _parse_iso_datetime(value):
     return None
 
 
+def _market_window_from_slug(slug):
+    match = re.search(r"btc-updown-15m-(\d+)", slug or "")
+    if not match:
+        return None, None
+    try:
+        expiration = datetime.datetime.fromtimestamp(
+            int(match.group(1)),
+            tz=datetime.timezone.utc,
+        )
+    except (ValueError, OSError, OverflowError):
+        return None, None
+    target_time = expiration - _FIFTEEN_MINUTES
+    return target_time, expiration
+
+
 def _extract_market_times(market):
     start_time = _parse_iso_datetime(market.get("startDate")) or _parse_iso_datetime(market.get("startTime"))
     end_time = _parse_iso_datetime(market.get("endDate")) or _parse_iso_datetime(market.get("endTime"))
@@ -150,6 +168,29 @@ def fetch_polymarket_data_struct():
     return resolve_current_market()
 
 
+def resolve_market_by_expiration(expiration_time_utc):
+    if expiration_time_utc is None:
+        return None, "Expiration time is required"
+    if expiration_time_utc.tzinfo is None:
+        expiration_time_utc = expiration_time_utc.replace(tzinfo=datetime.timezone.utc)
+    polymarket_url = generate_market_url(expiration_time_utc)
+    slug = polymarket_url.split("/")[-1]
+    poly_data, poly_err = get_polymarket_metadata(slug)
+    if poly_err:
+        return None, f"Polymarket Error: {poly_err}"
+    target_time_utc, expiration_time_utc = _market_window_from_slug(slug)
+    result = {
+        "slug": slug,
+        "polymarket_url": polymarket_url,
+        "clob_token_ids": poly_data.get("clob_token_ids", []),
+        "outcomes": poly_data.get("outcomes", []),
+        "target_time_utc": target_time_utc,
+        "expiration_time_utc": expiration_time_utc,
+        "polymarket_time_utc": poly_data.get("polymarket_time_utc"),
+    }
+    return result, None
+
+
 def resolve_current_market():
     """
     Resolve the active market slug and token IDs with a single Polymarket API call.
@@ -167,8 +208,9 @@ def resolve_current_market():
         if poly_err:
             return None, f"Polymarket Error: {poly_err}"
 
-        target_time_utc = poly_data.get("start_time") or target_time_utc
-        expiration_time_utc = poly_data.get("end_time") or expiration_time_utc
+        slug_target_time, slug_expiration_time = _market_window_from_slug(slug)
+        target_time_utc = slug_target_time or poly_data.get("start_time") or target_time_utc
+        expiration_time_utc = slug_expiration_time or poly_data.get("end_time") or expiration_time_utc
 
         result = {
             "slug": slug,
