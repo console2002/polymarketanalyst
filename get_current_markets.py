@@ -46,7 +46,7 @@ def get_available_market_urls(num_markets=12):
         market_expiration = expiration_time_utc + datetime.timedelta(minutes=15 * i)
         markets.append(
             {
-                "polymarket": generate_polymarket_url(market_start),
+                "polymarket": generate_polymarket_url(market_expiration),
                 "target_time_utc": market_start,
                 "expiration_time_utc": market_expiration,
                 "target_time_et": market_start.astimezone(et_timezone),
