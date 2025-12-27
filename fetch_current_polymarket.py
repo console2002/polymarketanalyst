@@ -109,13 +109,13 @@ def _market_window_from_slug(slug):
     if not match:
         return None, None
     try:
-        expiration = datetime.datetime.fromtimestamp(
+        target_time = datetime.datetime.fromtimestamp(
             int(match.group(1)),
             tz=datetime.timezone.utc,
         )
     except (ValueError, OSError, OverflowError):
         return None, None
-    target_time = expiration - _FIFTEEN_MINUTES
+    expiration = target_time + _FIFTEEN_MINUTES
     return target_time, expiration
 
 
@@ -168,12 +168,12 @@ def fetch_polymarket_data_struct():
     return resolve_current_market()
 
 
-def resolve_market_by_expiration(expiration_time_utc):
-    if expiration_time_utc is None:
-        return None, "Expiration time is required"
-    if expiration_time_utc.tzinfo is None:
-        expiration_time_utc = expiration_time_utc.replace(tzinfo=datetime.timezone.utc)
-    polymarket_url = generate_market_url(expiration_time_utc)
+def resolve_market_by_start_time(start_time_utc):
+    if start_time_utc is None:
+        return None, "Start time is required"
+    if start_time_utc.tzinfo is None:
+        start_time_utc = start_time_utc.replace(tzinfo=datetime.timezone.utc)
+    polymarket_url = generate_market_url(start_time_utc)
     slug = polymarket_url.split("/")[-1]
     poly_data, poly_err = get_polymarket_metadata(slug)
     if poly_err:
@@ -189,6 +189,15 @@ def resolve_market_by_expiration(expiration_time_utc):
         "polymarket_time_utc": poly_data.get("polymarket_time_utc"),
     }
     return result, None
+
+
+def resolve_market_by_expiration(expiration_time_utc):
+    if expiration_time_utc is None:
+        return None, "Expiration time is required"
+    if expiration_time_utc.tzinfo is None:
+        expiration_time_utc = expiration_time_utc.replace(tzinfo=datetime.timezone.utc)
+    start_time_utc = expiration_time_utc - _FIFTEEN_MINUTES
+    return resolve_market_by_start_time(start_time_utc)
 
 
 def resolve_current_market():

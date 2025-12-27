@@ -33,7 +33,7 @@ def generate_15m_slug(target_time):
     """
     Generates the Polymarket event slug for a 15-minute market.
     Format: btc-updown-15m-[TIMESTAMP]
-    The timestamp is the expiration time (Unix timestamp).
+    The timestamp is the market start time (Unix timestamp).
     """
     # Ensure time is in UTC for timestamp calculation
     if target_time.tzinfo is None:
@@ -58,20 +58,17 @@ def get_next_market_urls(num_hours=5):
     urls = []
     now = datetime.datetime.now(pytz.utc)
     
-    # Start from the next 15-minute interval
-    # Example: 12:07 -> 12:15 expiration
-    # Example: 12:14 -> 12:30 expiration (buffer needed?)
-    # Usually markets close bets a bit before.
-    # Let's target the next standard 15m block: 00, 15, 30, 45
+    # Start from the current 15-minute interval start.
+    # Example: 12:07 -> 12:00 start
+    # Example: 12:14 -> 12:00 start
     
     base_time = now.replace(second=0, microsecond=0)
     minutes = base_time.minute
     remainder = minutes % 15
-    minutes_to_add = 15 - remainder
-    next_quarter = base_time + datetime.timedelta(minutes=minutes_to_add)
+    current_quarter = base_time - datetime.timedelta(minutes=remainder)
     
     for i in range(num_hours * 4): # Fetch enough for X hours
-        target_time = next_quarter + datetime.timedelta(minutes=15 * i)
+        target_time = current_quarter + datetime.timedelta(minutes=15 * i)
         urls.append(generate_market_url(target_time))
         
     return urls
@@ -79,20 +76,16 @@ def get_next_market_urls(num_hours=5):
 def get_current_market_url():
     """
     Determines the URL for the 'current' necessary market.
-    Logic: The NEXT expiring 15-min market.
+    Logic: The current 15-min market start.
     """
     now = datetime.datetime.now(pytz.utc)
     
-    # Calculate next 15-minute interval
+    # Calculate current 15-minute interval start
     base_time = now.replace(second=0, microsecond=0)
     minutes = base_time.minute
     remainder = minutes % 15
-    minutes_to_add = 15 - remainder
-    
-    # If we are very close to the expiration (e.g. < 2 mins), maybe jump to the next one?
-    # For now, let's rigidly stick to the next quarter hour.
-    next_quarter = base_time + datetime.timedelta(minutes=minutes_to_add)
-    return generate_market_url(next_quarter)
+    current_quarter = base_time - datetime.timedelta(minutes=remainder)
+    return generate_market_url(current_quarter)
 
 def generate_urls_until_year_end():
     """

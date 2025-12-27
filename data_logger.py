@@ -19,7 +19,7 @@ import pytz
 import websockets
 from websockets.exceptions import InvalidMessage
 
-from fetch_current_polymarket import resolve_current_market, resolve_market_by_expiration
+from fetch_current_polymarket import resolve_current_market, resolve_market_by_start_time
 from websocket_logger import PolymarketWebsocketLogger, STALE_THRESHOLD_SECONDS
 
 LOGGING_INTERVAL_SECONDS = 1
@@ -499,11 +499,11 @@ async def run_logger(broadcaster=None, stop_event=None):
         if not started:
             broadcaster = None
 
-    next_expiration = None
+    next_start_time = None
     try:
         while not stop_event.is_set():
-            if next_expiration:
-                market_info, err = resolve_market_by_expiration(next_expiration)
+            if next_start_time:
+                market_info, err = resolve_market_by_start_time(next_start_time)
             else:
                 market_info, err = resolve_current_market()
             if err:
@@ -515,10 +515,10 @@ async def run_logger(broadcaster=None, stop_event=None):
             target_time = _ensure_utc(market_info.get("target_time_utc"))
             expiration = _ensure_utc(market_info.get("expiration_time_utc"))
             if expiration and now >= expiration:
-                next_expiration = expiration + MARKET_DURATION
+                next_start_time = expiration
                 continue
             if target_time and now < target_time:
-                next_expiration = target_time
+                next_start_time = target_time
                 continue
 
             aggregator = PriceAggregator(market_info, broadcaster=broadcaster)
@@ -549,13 +549,18 @@ async def run_logger(broadcaster=None, stop_event=None):
                     await ws_logger.shutdown()
                     with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
                         await asyncio.wait_for(logger_task, timeout=5)
-                    next_expiration = expiration + MARKET_DURATION if expiration else None
+                    next_start_time = expiration if expiration else None
                     continue
                 if logger_task in done:
                     await ws_logger.shutdown()
                     with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
                         await asyncio.wait_for(logger_task, timeout=5)
-                    next_expiration = expiration
+                    if target_time:
+                        next_start_time = target_time
+                    elif expiration:
+                        next_start_time = expiration - MARKET_DURATION
+                    else:
+                        next_start_time = None
                     continue
             finally:
                 stop_task.cancel()
