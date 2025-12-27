@@ -147,6 +147,13 @@ def fetch_polymarket_data_struct():
     """
     Fetches current Polymarket market metadata (token IDs, outcomes, times).
     """
+    return resolve_current_market()
+
+
+def resolve_current_market():
+    """
+    Resolve the active market slug and token IDs with a single Polymarket API call.
+    """
     try:
         market_info = get_current_market_urls()
         polymarket_url = market_info["polymarket"]
@@ -165,6 +172,7 @@ def fetch_polymarket_data_struct():
 
         result = {
             "slug": slug,
+            "polymarket_url": polymarket_url,
             "clob_token_ids": poly_data.get("clob_token_ids", []),
             "outcomes": poly_data.get("outcomes", []),
             "target_time_utc": target_time_utc,
