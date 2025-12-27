@@ -5,25 +5,43 @@ A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down pr
 ## Quickstart
 Run setup (optional if you already have dependencies installed):
 ```bat
-setup.bat
+install.bat
 ```
 
 ### Logger only (CSV output)
+If you ran `install.bat`, use the virtualenv Python:
+```bat
+.\.venv\Scripts\python.exe data_logger.py
+```
+Otherwise:
 ```bash
 python data_logger.py
 ```
 
 ### GUI only (connects to an existing logger stream)
+If you ran `install.bat`:
+```bat
+.\.venv\Scripts\python.exe -m streamlit run logger_gui.py
+```
+Otherwise:
 ```bash
 streamlit run logger_gui.py
 ```
 
 ### GUI + logger (recommended)
 Start the logger with the WebSocket UI stream enabled:
+```bat
+.\.venv\Scripts\python.exe data_logger.py --ui-stream
+```
+Or:
 ```bash
 python data_logger.py --ui-stream
 ```
 Then, in a new terminal:
+```bat
+.\.venv\Scripts\python.exe -m streamlit run logger_gui.py
+```
+Or:
 ```bash
 streamlit run logger_gui.py
 ```
@@ -77,27 +95,23 @@ The backtester's behavior can be easily adjusted by modifying the following glob
 Upon market resolution, the backtester now provides a single, consolidated summary for each market. This summary includes the total PnL, total shares traded for 'Up' and 'Down' sides, and their average entry prices, offering a clear overview of market performance rather than individual position resolutions.
 
 
-#### How to Run Data fetcher and Dashboard
+#### How to Run Data Logger and GUI
 
 **Step 0: Run setup**
 Open a terminal and run:
 ```bat
-setup.bat
+install.bat
 ```
 
-When setup finishes, use the exact commands it prints:
+Then run the logger and GUI in separate terminals:
+```bat
+.\.venv\Scripts\python.exe data_logger.py
 ```
-==============================================================
-Setup complete.
-==============================================================
-Next steps:
-  1) Run the data logger:
-       .\.venv\Scripts\python.exe data_logger.py
-  2) In a new terminal, start the dashboard:
-       .\.venv\Scripts\python.exe -m streamlit run dashboard.py
+```bat
+.\.venv\Scripts\python.exe -m streamlit run logger_gui.py
 ```
 
-This will continuously fetch market data every 10 seconds and save it to `market_data.csv`. The dashboard will open in your browser at `http://localhost:8501`.
+This will continuously fetch market data and save it to daily CSV files (one per day, named `DDMMYYYY.csv`). The GUI will open in your browser at `http://localhost:8501`.
 
 #### How to Run backtester
 
@@ -147,7 +161,7 @@ The logger writes a row per outcome (Up and Down) each time it logs. Files are c
 | `last_trade_price` | Most recent trade price (if available). |
 | `last_trade_size` | Most recent trade size (if available). |
 | `last_trade_side` | Most recent trade side (buy/sell). |
-| `last_trade_ts` | Most recent trade timestamp (UTC). |
+| `last_trade_ts` | Most recent trade timestamp (UTC, if available). |
 | `heartbeat_last_seen` | Last heartbeat time from the stream (UTC). |
 | `reconnect_count` | Number of reconnects since start. |
 | `is_stale` | Whether the data is stale per the logger threshold. |
@@ -184,14 +198,18 @@ Contracts pay out based on whether the price at **Expiration** is higher ("Up") 
 ```
 PolymarketAnalyst/
 ├── backtester.py                 # Script to backtest trading strategies
-├── dashboard.py                  # Streamlit dashboard application
-├── data_logger.py               # Background data collection service
+├── backtester_arbitrage.py       # Script to backtest arbitrage strategies
+├── backtest8020.py               # 80/20 backtest variant
+├── backtest_metrics.py           # Backtest metrics helpers
+├── data_logger.py                # Background data collection service
 ├── fetch_current_polymarket.py  # Core market data fetching logic
 ├── find_new_market.py           # Script to find new markets
 ├── get_current_markets.py       # Script to get current markets
+├── logger_gui.py                # Streamlit GUI (connects to logger stream)
+├── websocket_logger.py          # WebSocket logging client
 ├── .gitignore                   # Specifies intentionally untracked files to ignore
 ├── README.md                    # This file
-└── *.csv                         # Daily historical data (auto-generated and used by dashboard)
+└── *.csv                         # Daily historical data (auto-generated and used by the GUI)
 ```
 
 ## Contributing
