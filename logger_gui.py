@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import queue
+import re
 import signal
 import subprocess
 import sys
@@ -170,9 +171,10 @@ def _format_market_label(market):
 
 def _get_logger_process():
     global _LOGGER_PROCESS
-    proc = _LOGGER_PROCESS
+    proc = st.session_state.get("logger_process", _LOGGER_PROCESS)
     if proc and proc.poll() is not None:
         _LOGGER_PROCESS = None
+        st.session_state.logger_process = None
         return None
     return proc
 
@@ -201,6 +203,17 @@ def _write_logger_pid(pid):
 def _is_pid_running(pid):
     if not pid:
         return False
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return False
+        return re.search(rf"\b{pid}\b", result.stdout) is not None
     try:
         os.kill(pid, 0)
     except OSError:
@@ -213,7 +226,16 @@ def _stop_logger_pid(pid):
         return False, "No PID available for stop request."
     try:
         if os.name == "nt":
-            os.kill(pid, signal.SIGTERM)
+            result = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = result.stderr.strip() or result.stdout.strip()
+                detail = detail or "unknown error"
+                return False, f"Failed to stop logger PID {pid}: {detail}"
         else:
             os.kill(pid, signal.SIGTERM)
     except OSError as exc:
@@ -331,13 +353,13 @@ def _stop_logger_process(proc):
 
 
 def _stop_logger(logger_proc=None):
+    if logger_proc and logger_proc.poll() is None:
+        _stop_logger_process(logger_proc)
+        return True, "Stop signal sent to logger subprocess.", "process"
     logger_pid = _read_logger_pid()
     if _is_pid_running(logger_pid):
         ok, message = _stop_logger_pid(logger_pid)
         return ok, message, "pid"
-    if logger_proc and logger_proc.poll() is None:
-        _stop_logger_process(logger_proc)
-        return True, "Stop signal sent to logger subprocess.", "process"
     return False, "No running logger found to stop.", "none"
 
 
@@ -410,6 +432,7 @@ if start_clicked and not logger_running and can_manage_logger:
         logger_running = False
     elif logger_proc and logger_proc.poll() is None:
         _LOGGER_PROCESS = logger_proc
+        st.session_state.logger_process = logger_proc
         logger_running = True
         _write_logger_pid(logger_proc.pid)
         st.sidebar.success("Logger process started.")
@@ -434,6 +457,7 @@ if stop_clicked and logger_running:
                 stopped = _wait_for_logger_exit(logger_proc, timeout=2)
             if stopped:
                 _LOGGER_PROCESS = None
+                st.session_state.logger_process = None
                 logger_running = False
             st.sidebar.info("Logger stop requested.")
             _append_launch_log("Logger stop requested.")

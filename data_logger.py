@@ -12,9 +12,11 @@ import contextlib
 import csv
 import datetime
 import json
+import re
 import os
 import signal
 import sys
+import subprocess
 
 import pytz
 import requests
@@ -123,6 +125,17 @@ def _read_logger_pid():
 def _is_pid_running(pid):
     if not pid:
         return False
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return False
+        return re.search(rf"\b{pid}\b", result.stdout) is not None
     try:
         os.kill(pid, 0)
     except OSError:
@@ -134,7 +147,19 @@ def _stop_logger_pid(pid):
     if not pid:
         return False, "No running logger PID found."
     try:
-        os.kill(pid, signal.SIGTERM)
+        if os.name == "nt":
+            result = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = result.stderr.strip() or result.stdout.strip()
+                detail = detail or "unknown error"
+                return False, f"Failed to stop logger PID {pid}: {detail}"
+        else:
+            os.kill(pid, signal.SIGTERM)
     except OSError as exc:
         return False, f"Failed to stop logger PID {pid}: {exc}"
     return True, f"Stop signal sent to logger PID {pid}."
@@ -406,16 +431,11 @@ class LoggerStreamBroadcaster:
         pid = self._read_pid()
         if not pid:
             return False
-        try:
-            os.kill(pid, 0)
-        except OSError:
+        if not _is_pid_running(pid):
             self._remove_pid()
             return False
-        try:
-            os.kill(pid, signal.SIGTERM)
-            return True
-        except OSError:
-            return False
+        ok, _ = _stop_logger_pid(pid)
+        return ok
 
 
 class PriceAggregator:
