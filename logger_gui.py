@@ -318,6 +318,17 @@ def _stop_logger_process(proc):
         proc.send_signal(signal.SIGINT)
 
 
+def _stop_logger(logger_proc=None):
+    logger_pid = _read_logger_pid()
+    if _is_pid_running(logger_pid):
+        ok, message = _stop_logger_pid(logger_pid)
+        return ok, message, "pid"
+    if logger_proc and logger_proc.poll() is None:
+        _stop_logger_process(logger_proc)
+        return True, "Stop signal sent to logger subprocess.", "process"
+    return False, "No running logger found to stop.", "none"
+
+
 def _wait_for_logger_exit(proc, timeout=5):
     if proc is None:
         return True
@@ -402,25 +413,30 @@ if start_clicked and not logger_running and can_manage_logger:
         logger_running = False
 if stop_clicked and logger_running:
     try:
-        _stop_logger_process(logger_proc)
-        stopped = _wait_for_logger_exit(logger_proc)
-        if not stopped:
-            logger_proc.terminate()
-            stopped = _wait_for_logger_exit(logger_proc, timeout=2)
-        if stopped:
-            st.session_state.logger_process = None
-            logger_running = False
-            st.sidebar.info("Logger process stopped.")
-            _append_launch_log("Logger process stopped.")
+        ok, message, stop_mode = _stop_logger(logger_proc)
+        if ok and stop_mode == "process":
+            stopped = _wait_for_logger_exit(logger_proc)
+            if not stopped:
+                logger_proc.terminate()
+                stopped = _wait_for_logger_exit(logger_proc, timeout=2)
+            if stopped:
+                st.session_state.logger_process = None
+                logger_running = False
+            st.sidebar.info("Logger stop requested.")
+            _append_launch_log("Logger stop requested.")
+        elif ok:
+            st.sidebar.info(message)
+            _append_launch_log(message)
         else:
-            st.sidebar.warning("Stop signal sent; logger still shutting down.")
-            _append_launch_log("Stop signal sent; logger still shutting down.")
+            st.session_state.logger_error = message
+            st.sidebar.error(st.session_state.logger_error)
+            _append_launch_log(message)
     except Exception as exc:
         st.session_state.logger_error = f"Unable to stop logger process: {exc}"
         st.sidebar.error(st.session_state.logger_error)
         _append_launch_log(f"Stop signal failed: {exc}")
 elif stop_clicked and logger_pid_running:
-    ok, message = _stop_logger_pid(logger_pid)
+    ok, message, _ = _stop_logger(logger_proc)
     if ok:
         st.sidebar.info(message)
         _append_launch_log(message)
