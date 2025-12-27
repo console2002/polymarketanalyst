@@ -322,9 +322,12 @@ if start_clicked and not logger_running and can_manage_logger:
 if stop_clicked and logger_running:
     try:
         if os.name == "nt":
-            if hasattr(signal, "CTRL_BREAK_EVENT"):
-                logger_proc.send_signal(signal.CTRL_BREAK_EVENT)
-            else:
+            try:
+                if hasattr(signal, "CTRL_BREAK_EVENT"):
+                    logger_proc.send_signal(signal.CTRL_BREAK_EVENT)
+                else:
+                    logger_proc.terminate()
+            except Exception:
                 logger_proc.terminate()
         else:
             logger_proc.send_signal(signal.SIGINT)
@@ -333,6 +336,7 @@ if stop_clicked and logger_running:
         _append_launch_log("Stop signal sent to logger.")
     except Exception as exc:
         st.session_state.logger_error = f"Unable to stop logger process: {exc}"
+        st.sidebar.error(st.session_state.logger_error)
         _append_launch_log(f"Stop signal failed: {exc}")
 
 if st.session_state.get("logger_error"):
