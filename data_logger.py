@@ -14,12 +14,15 @@ import datetime
 import json
 import os
 import signal
+import sys
 
 import pytz
 import websockets
 from websockets.exceptions import InvalidMessage
 
 from fetch_current_polymarket import resolve_current_market, resolve_market_by_start_time
+from get_current_markets import get_current_market_urls
+from preflight import PreflightError, run_preflight
 from websocket_logger import PolymarketWebsocketLogger, STALE_THRESHOLD_SECONDS
 
 LOGGING_INTERVAL_SECONDS = 1
@@ -589,6 +592,21 @@ async def _run_with_signals(broadcaster):
     await run_logger(broadcaster, stop_event=stop_event)
 
 
+def _current_market_slug():
+    market_info = get_current_market_urls()
+    polymarket_url = market_info.get("polymarket")
+    if not polymarket_url:
+        return None
+    return polymarket_url.split("/")[-1]
+
+
+def _run_startup_preflight():
+    slug = _current_market_slug()
+    if not slug:
+        raise PreflightError("preflight.error unable_to_resolve_slug")
+    run_preflight(slug)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Polymarket price logger")
     parser.add_argument(
@@ -619,7 +637,20 @@ def main():
             "(starting at --ui-stream-port)."
         ),
     )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Run preflight diagnostics and exit without starting websockets.",
+    )
     args = parser.parse_args()
+    try:
+        _run_startup_preflight()
+    except PreflightError as exc:
+        print(str(exc))
+        sys.exit(1)
+    if args.preflight:
+        sys.exit(0)
+
     print("Starting Data Logger...")
     broadcaster = None
     if args.ui_stream:
