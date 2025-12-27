@@ -150,7 +150,10 @@ class LoggerStreamBroadcaster:
             self._clients.discard(websocket)
 
     async def _process_request(self, path, request_headers):
-        upgrade = request_headers.get("Upgrade", "")
+        headers = request_headers
+        if hasattr(request_headers, "headers"):
+            headers = request_headers.headers
+        upgrade = headers.get("Upgrade", "")
         if upgrade.lower() != "websocket":
             return (
                 426,
@@ -159,7 +162,7 @@ class LoggerStreamBroadcaster:
             )
         if self.allowed_origins is None:
             return None
-        origin = request_headers.get("Origin")
+        origin = headers.get("Origin")
         if origin not in self.allowed_origins:
             return (
                 403,
