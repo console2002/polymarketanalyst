@@ -191,7 +191,7 @@ By default, the logger tracks the **current 15-minute market**: the contract tha
 
 ## FAQ
 **Why does the GUI say “Waiting for updates”?**  
-Make sure the logger is running with `--ui-stream` and that the GUI is pointing to the same WebSocket URL (default `ws://127.0.0.1:8765`).
+Make sure the logger is running with `--ui-stream` and that the GUI is pointing to the same WebSocket URL (default `ws://127.0.0.1:8765`). Note that this is a WebSocket endpoint, not an HTTP URL.
 
 **Why is the data marked stale?**  
 If the stream pauses or Polymarket stops sending updates, the logger flags the row as stale once it exceeds the staleness threshold. This is informational and does not stop logging.

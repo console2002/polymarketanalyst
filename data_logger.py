@@ -17,6 +17,7 @@ import signal
 
 import pytz
 import websockets
+from websockets.exceptions import InvalidMessage
 
 from fetch_current_polymarket import resolve_current_market
 from websocket_logger import PolymarketWebsocketLogger, STALE_THRESHOLD_SECONDS
@@ -95,18 +96,31 @@ def _ensure_csv(file_path):
 
 
 class LoggerStreamBroadcaster:
-    def __init__(self, host="127.0.0.1", port=8765, max_queue=1000, send_timeout=0.25):
+    def __init__(
+        self,
+        host="127.0.0.1",
+        port=8765,
+        max_queue=1000,
+        send_timeout=0.25,
+        allowed_origins=None,
+    ):
         self.host = host
         self.port = port
         self.queue = asyncio.Queue(maxsize=max_queue)
         self.send_timeout = send_timeout
+        self.allowed_origins = set(allowed_origins) if allowed_origins else None
         self._clients = set()
         self._server = None
         self._task = None
         self._shutdown = asyncio.Event()
 
     async def start(self):
-        self._server = await websockets.serve(self._handle_client, self.host, self.port)
+        self._server = await websockets.serve(
+            self._handle_client,
+            self.host,
+            self.port,
+            process_request=self._process_request,
+        )
         self._task = asyncio.create_task(self._broadcast_loop())
         print(f"UI stream available at ws://{self.host}:{self.port}")
 
@@ -130,8 +144,29 @@ class LoggerStreamBroadcaster:
         self._clients.add(websocket)
         try:
             await websocket.wait_closed()
+        except (InvalidMessage, EOFError):
+            return
         finally:
             self._clients.discard(websocket)
+
+    async def _process_request(self, path, request_headers):
+        upgrade = request_headers.get("Upgrade", "")
+        if upgrade.lower() != "websocket":
+            return (
+                426,
+                [("Content-Type", "text/plain; charset=utf-8"), ("Connection", "close")],
+                b"Expected WebSocket connection.\n",
+            )
+        if self.allowed_origins is None:
+            return None
+        origin = request_headers.get("Origin")
+        if origin not in self.allowed_origins:
+            return (
+                403,
+                [("Content-Type", "text/plain; charset=utf-8"), ("Connection", "close")],
+                b"Origin not allowed.\n",
+            )
+        return None
 
     async def _broadcast_loop(self):
         while not self._shutdown.is_set():
