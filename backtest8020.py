@@ -12,7 +12,7 @@ from backtest_metrics import (
     wins_between_losses_stats,
 )
 
-DATA_FILE = "market_data.csv"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATE_FILE_PATTERN = re.compile(r"^\d{8}\.csv$")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 TIMEZONE_ET = "US/Eastern"
@@ -562,13 +562,18 @@ if __name__ == "__main__":
 
     try:
         date_files = sorted(
-            [file_name for file_name in os.listdir(".") if DATE_FILE_PATTERN.match(file_name)],
+            [
+                file_name
+                for file_name in os.listdir(SCRIPT_DIR)
+                if DATE_FILE_PATTERN.match(file_name)
+            ],
             key=lambda file_name: datetime.datetime.strptime(file_name.split(".")[0], "%d%m%Y"),
         )
         if date_files:
-            backtester.load_data_files(date_files)
+            dated_paths = [os.path.join(SCRIPT_DIR, file_name) for file_name in date_files]
+            backtester.load_data_files(dated_paths)
         else:
-            backtester.load_data(DATA_FILE)
+            raise FileNotFoundError("Data file(s) not found: no dated CSV files found.")
     except FileNotFoundError as e:
         print(e)
         exit()
