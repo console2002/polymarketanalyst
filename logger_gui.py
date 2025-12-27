@@ -451,7 +451,7 @@ if rolling_rows:
     st.subheader("Latest Logged Entries")
     st.dataframe(
         table_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
