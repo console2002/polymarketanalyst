@@ -30,6 +30,31 @@ def get_current_market_urls():
         "target_time_et": start_time_utc.astimezone(pytz.timezone('US/Eastern'))
     }
 
+
+def get_available_market_urls(num_markets=12):
+    """
+    Returns a list of upcoming 15-minute Polymarket URLs starting from the current market.
+    """
+    current_market = get_current_market_urls()
+    start_time_utc = current_market["target_time_utc"]
+    expiration_time_utc = current_market["expiration_time_utc"]
+    et_timezone = pytz.timezone("US/Eastern")
+    markets = []
+
+    for i in range(num_markets):
+        market_start = start_time_utc + datetime.timedelta(minutes=15 * i)
+        market_expiration = expiration_time_utc + datetime.timedelta(minutes=15 * i)
+        markets.append(
+            {
+                "polymarket": generate_polymarket_url(market_start),
+                "target_time_utc": market_start,
+                "expiration_time_utc": market_expiration,
+                "target_time_et": market_start.astimezone(et_timezone),
+            }
+        )
+
+    return markets
+
 if __name__ == "__main__":
     urls = get_current_market_urls()
     
