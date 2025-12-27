@@ -102,7 +102,6 @@ def _drain_messages():
             message = out_queue.get_nowait()
         except queue.Empty:
             break
-        last_message_time = datetime.now(timezone.utc)
         try:
             payload = json.loads(message)
         except json.JSONDecodeError:
@@ -110,6 +109,13 @@ def _drain_messages():
         payload_timestamp = payload.get("timestamp")
         if payload_timestamp:
             latest_update = payload_timestamp
+            parsed_timestamp = _parse_last_update(payload_timestamp)
+            if parsed_timestamp is not None:
+                last_message_time = parsed_timestamp
+            else:
+                last_message_time = datetime.now(timezone.utc)
+        else:
+            last_message_time = datetime.now(timezone.utc)
         rows = payload.get("rows") or []
         if rows:
             latest_rows = rows
@@ -258,7 +264,10 @@ def _start_logger_process(host, port):
 def _stop_logger_process(proc):
     if os.name == "nt":
         if hasattr(signal, "CTRL_BREAK_EVENT"):
-            proc.send_signal(signal.CTRL_BREAK_EVENT)
+            try:
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            except Exception:
+                proc.terminate()
         else:
             proc.terminate()
     else:
@@ -409,7 +418,7 @@ _drain_messages()
 
 last_update = st.session_state.last_update
 last_update_dt = _parse_last_update(last_update)
-last_message_time = st.session_state.get("last_message_time")
+last_message_time = st.session_state.get("last_message_time") or last_update_dt
 stream_active = (
     last_message_time is not None
     and (datetime.now(timezone.utc) - last_message_time).total_seconds()
