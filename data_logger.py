@@ -53,6 +53,13 @@ def _ensure_csv(file_path):
                     "Timestamp_UK",
                     "TargetTime",
                     "Expiration",
+                    "server_time_utc",
+                    "local_time_utc",
+                    "stream_seq_id",
+                    "heartbeat_last_seen",
+                    "reconnect_count",
+                    "is_stale",
+                    "stale_age_seconds",
                     "UpBestBid",
                     "DownBestBid",
                     "UpBestAsk",
@@ -85,7 +92,6 @@ def _ensure_csv(file_path):
                     "DownIsStale",
                     "UpStaleAgeSeconds",
                     "DownStaleAgeSeconds",
-                    "LocalTimeUtc",
                 ]
             )
         print(f"Created {file_path}")
@@ -154,12 +160,28 @@ class PriceAggregator:
         target_time_str = _format_timestamp(target_time, TIMEZONE_UK)
         expiration_str = _format_timestamp(expiration, TIMEZONE_UK)
         local_time_utc = datetime.datetime.now(pytz.utc)
+        stream_seq_id = up_update.get("stream_seq_id") or down_update.get("stream_seq_id")
+        heartbeat_last_seen = up_update.get("heartbeat_last_seen") or down_update.get(
+            "heartbeat_last_seen"
+        )
+        reconnect_count = up_update.get("reconnect_count")
+        if reconnect_count is None:
+            reconnect_count = down_update.get("reconnect_count")
+        stream_is_stale = up_is_stale or down_is_stale
+        stream_stale_age = self._max_stale_age(up_stale_age, down_stale_age)
 
         row = [
             timestamp_et,
             timestamp_uk,
             target_time_str,
             expiration_str,
+            _format_timestamp_utc(event_timestamp),
+            _format_timestamp_utc(local_time_utc),
+            stream_seq_id,
+            _format_timestamp_utc(heartbeat_last_seen),
+            reconnect_count,
+            stream_is_stale,
+            stream_stale_age,
             up_update["best_bid"],
             down_update["best_bid"],
             up_update["best_ask"],
@@ -192,7 +214,6 @@ class PriceAggregator:
             down_is_stale,
             up_stale_age,
             down_stale_age,
-            _format_timestamp_utc(local_time_utc),
         ]
 
         data_file = _get_data_file(event_timestamp)
@@ -239,12 +260,19 @@ class PriceAggregator:
     def _stale_info(update, timestamp_dt):
         last_update = update.get("last_update_ts") or update.get("timestamp")
         if not last_update:
-            return True, ""
+            return True, None
         if last_update.tzinfo is None:
             last_update = pytz.utc.localize(last_update)
         age_seconds = max(0.0, (timestamp_dt - last_update).total_seconds())
         is_stale = age_seconds > STALE_THRESHOLD_SECONDS
         return is_stale, round(age_seconds, 3)
+
+    @staticmethod
+    def _max_stale_age(*ages):
+        numeric_ages = [age for age in ages if isinstance(age, (int, float))]
+        if not numeric_ages:
+            return ""
+        return max(numeric_ages)
 
 
 async def run_logger():
