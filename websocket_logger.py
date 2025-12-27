@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import pytz
 import websockets
 
-CLOB_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+CLOB_WS_URL = "wss://ws-subscriptions-clob.polymarket.com"
 RTDS_WS_URL = "wss://ws-live-data.polymarket.com"
 CLOB_HEARTBEAT_SECONDS = 10
 RTDS_HEARTBEAT_SECONDS = 5
@@ -538,10 +538,10 @@ class PolymarketWebsocketLogger:
         return {"type": "market", "assets_ids": self._asset_ids}
 
     def _clob_resubscribe_payload(self):
-        return {"assets_ids": self._asset_ids, "operation": "subscribe"}
+        return {"type": "market", "assets_ids": self._asset_ids}
 
     def _rtds_subscribe_payload(self):
         subscription = {"topic": "clob_market", "type": "last_trade_price"}
         if self._asset_ids:
-            subscription["filters"] = json.dumps(self._asset_ids)
+            subscription["filters"] = self._asset_ids
         return {"action": "subscribe", "subscriptions": [subscription]}
