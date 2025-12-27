@@ -45,7 +45,6 @@ CSV_HEADERS = [
     "expiration_uk",
     "server_time_utc",
     "local_time_utc",
-    "stream_seq_id",
     "token_id",
     "outcome",
     "best_bid",
@@ -60,7 +59,6 @@ CSV_HEADERS = [
     "last_trade_side",
     "last_trade_ts",
     "heartbeat_last_seen",
-    "reconnect_count",
     "is_stale",
     "stale_age_seconds",
 ]
@@ -556,7 +554,6 @@ class PriceAggregator:
                 expiration_str,
                 _format_timestamp_utc(update.get("server_time_utc")),
                 _format_timestamp_utc(local_time_utc),
-                update.get("stream_seq_id"),
                 update.get("token_id"),
                 update.get("outcome"),
                 update["best_bid"],
@@ -571,7 +568,6 @@ class PriceAggregator:
                 update.get("last_trade_side"),
                 _format_timestamp_utc(update.get("last_trade_ts")),
                 _format_timestamp_utc(update.get("heartbeat_last_seen")),
-                update.get("reconnect_count"),
                 is_stale,
                 stale_age,
             ]

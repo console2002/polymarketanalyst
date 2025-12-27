@@ -136,7 +136,6 @@ The logger writes a row per outcome (Up and Down) each time it logs. Files are c
 | `expiration_uk` | Market expiration time in UK time (15-minute window end). |
 | `server_time_utc` | Polymarket server time (UTC) reported with the quote. |
 | `local_time_utc` | Local logger time (UTC) when the row was written. |
-| `stream_seq_id` | Sequence ID from the quote stream. |
 | `token_id` | CLOB token ID for the outcome. |
 | `outcome` | Outcome label (e.g., Up/Down). |
 | `best_bid` | Current best bid price. |
@@ -151,7 +150,6 @@ The logger writes a row per outcome (Up and Down) each time it logs. Files are c
 | `last_trade_side` | Most recent trade side (buy/sell). |
 | `last_trade_ts` | Most recent trade timestamp (UTC, if available). |
 | `heartbeat_last_seen` | Last heartbeat time from the stream (UTC). |
-| `reconnect_count` | Number of reconnects since start. |
 | `is_stale` | Whether the data is stale per the logger threshold. |
 | `stale_age_seconds` | Age in seconds since the last update. |
 
@@ -167,9 +165,6 @@ Make sure the logger is running with `--ui-stream` and that the GUI is pointing 
 
 **Why is the data marked stale?**  
 If the stream pauses or Polymarket stops sending updates, the logger flags the row as stale once it exceeds the staleness threshold. This is informational and does not stop logging.
-
-**Why do I see reconnects?**  
-The WebSocket client will reconnect automatically on transient network issues. Reconnect counts are tracked in the CSV to help diagnose interruptions.
 
 ## How It Works
 
