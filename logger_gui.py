@@ -182,6 +182,18 @@ def _parse_ws_target(ws_url):
     return scheme, host, port
 
 
+def _run_coroutine(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 def _is_ws_endpoint_active(ws_url, timeout=0.5):
     async def _probe():
         try:
@@ -195,10 +207,7 @@ def _is_ws_endpoint_active(ws_url, timeout=0.5):
         except Exception:
             return False
 
-    try:
-        return asyncio.run(_probe())
-    except RuntimeError:
-        return False
+    return _run_coroutine(_probe())
 
 
 def _enqueue_process_output(stream, label, out_queue):
@@ -274,6 +283,16 @@ def _stop_logger_process(proc):
         proc.send_signal(signal.SIGINT)
 
 
+def _wait_for_logger_exit(proc, timeout=5):
+    if proc is None:
+        return True
+    try:
+        proc.wait(timeout=timeout)
+        return True
+    except subprocess.TimeoutExpired:
+        return False
+
+
 def _format_launch_log_for_error():
     launch_log = st.session_state.get("launch_log", [])
     if not launch_log:
@@ -341,9 +360,18 @@ if start_clicked and not logger_running and can_manage_logger:
 if stop_clicked and logger_running:
     try:
         _stop_logger_process(logger_proc)
-        logger_running = False
-        st.sidebar.info("Stop signal sent to logger.")
-        _append_launch_log("Stop signal sent to logger.")
+        stopped = _wait_for_logger_exit(logger_proc)
+        if not stopped:
+            logger_proc.terminate()
+            stopped = _wait_for_logger_exit(logger_proc, timeout=2)
+        if stopped:
+            st.session_state.logger_process = None
+            logger_running = False
+            st.sidebar.info("Logger process stopped.")
+            _append_launch_log("Logger process stopped.")
+        else:
+            st.sidebar.warning("Stop signal sent; logger still shutting down.")
+            _append_launch_log("Stop signal sent; logger still shutting down.")
     except Exception as exc:
         st.session_state.logger_error = f"Unable to stop logger process: {exc}"
         st.sidebar.error(st.session_state.logger_error)
