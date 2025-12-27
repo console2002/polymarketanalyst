@@ -1,6 +1,7 @@
 import pandas as pd
 import datetime
 import os
+import re
 
 from backtest_metrics import (
     compute_r_metrics,
@@ -12,6 +13,7 @@ from backtest_metrics import (
 )
 
 DATA_FILE = "market_data.csv"
+DATE_FILE_PATTERN = re.compile(r"^\d{8}\.csv$")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 TIMEZONE_ET = "US/Eastern"
 
@@ -86,10 +88,19 @@ class Backtester:
         self.risk_percent = None
 
     def load_data(self, file_path):
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Data file not found at {file_path}")
+        self.load_data_files([file_path])
 
-        self.market_data = pd.read_csv(file_path)
+    def load_data_files(self, file_paths):
+        missing_files = [file_path for file_path in file_paths if not os.path.exists(file_path)]
+        if missing_files:
+            missing_list = ", ".join(missing_files)
+            raise FileNotFoundError(f"Data file(s) not found: {missing_list}")
+
+        data_frames = [pd.read_csv(file_path) for file_path in file_paths]
+        if not data_frames:
+            raise ValueError("No data files provided for backtest.")
+
+        self.market_data = pd.concat(data_frames, ignore_index=True)
 
         self.market_data['Timestamp'] = (
             pd.to_datetime(self.market_data['Timestamp'], format=TIME_FORMAT)
@@ -109,6 +120,10 @@ class Backtester:
 
         self.market_data.sort_values(by='Timestamp', inplace=True)
 
+        self.market_history = {}
+        self.market_open_times = {}
+        self.pending_market_summaries = {}
+
         for _, row in self.market_data.iterrows():
             market_id = (row['TargetTime'], row['Expiration'])
             if market_id not in self.market_history:
@@ -118,7 +133,8 @@ class Backtester:
         for market_id, rows in self.market_history.items():
             self.market_open_times[market_id] = rows[0]['Timestamp']
 
-        print(f"Loaded {len(self.market_data)} data points from {file_path}")
+        loaded_files = ", ".join(file_paths)
+        print(f"Loaded {len(self.market_data)} data points from {loaded_files}")
 
     def _resolve_single_position(self, market_id_tuple, position, current_timestamp):
         if market_id_tuple not in self.market_history:
@@ -477,7 +493,14 @@ if __name__ == "__main__":
     backtester = Backtester(initial_capital=INITIAL_CAPITAL)
 
     try:
-        backtester.load_data(DATA_FILE)
+        date_files = sorted(
+            [file_name for file_name in os.listdir(".") if DATE_FILE_PATTERN.match(file_name)],
+            key=lambda file_name: datetime.datetime.strptime(file_name.split(".")[0], "%d%m%Y"),
+        )
+        if date_files:
+            backtester.load_data_files(date_files)
+        else:
+            backtester.load_data(DATA_FILE)
     except FileNotFoundError as e:
         print(e)
         exit()
