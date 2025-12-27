@@ -12,7 +12,7 @@ from urllib3.util.retry import Retry
 
 from get_current_markets import get_current_market_urls
 from find_new_market import generate_market_url
-from preflight import parse_clob_token_ids
+
 
 # Configuration
 POLYMARKET_API_URL = "https://gamma-api.polymarket.com/events"
@@ -116,6 +116,27 @@ def _parse_list_field(value):
     return []
 
 
+def _parse_clob_token_ids(value):
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed if str(item).strip()]
+        cleaned = raw.strip("[]")
+        tokens = [token.strip().strip("'\"") for token in cleaned.split(",")]
+        return [token for token in tokens if token]
+    return []
+
+
 def _parse_iso_datetime(value):
     if not value:
         return None
@@ -212,7 +233,7 @@ def resolve_market_by_slug(slug):
             "polymarket_time_utc": fallback_data.get("polymarket_time_utc"),
         }, None
 
-    clob_token_ids = parse_clob_token_ids(gamma_market.get("clobTokenIds"))
+    clob_token_ids = _parse_clob_token_ids(gamma_market.get("clobTokenIds"))
     if len(clob_token_ids) != 2:
         return (
             None,
