@@ -3,17 +3,17 @@
 A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down prediction markets**. Features real-time data logging and an interactive dashboard for analyzing market behavior and identifying potential opportunities.
 
 ## Quickstart
-Run setup (optional if you already have dependencies installed):
+Run setup (Windows):
 ```bat
 install.bat
 ```
 
 ### Logger only (CSV output)
-If you ran `install.bat`, use the virtualenv Python:
+If you ran `install.bat`, use the virtualenv Python (not your system Python):
 ```bat
 .\.venv\Scripts\python.exe data_logger.py
 ```
-Otherwise:
+macOS/Linux (after activating the venv):
 ```bash
 python data_logger.py
 ```
@@ -23,7 +23,7 @@ If you ran `install.bat`:
 ```bat
 .\.venv\Scripts\python.exe -m streamlit run logger_gui.py
 ```
-Otherwise:
+macOS/Linux (after activating the venv):
 ```bash
 streamlit run logger_gui.py
 ```
@@ -33,7 +33,7 @@ Start the logger with the WebSocket UI stream enabled:
 ```bat
 .\.venv\Scripts\python.exe data_logger.py --ui-stream
 ```
-Or:
+macOS/Linux (after activating the venv):
 ```bash
 python data_logger.py --ui-stream
 ```
@@ -41,9 +41,17 @@ Then, in a new terminal:
 ```bat
 .\.venv\Scripts\python.exe -m streamlit run logger_gui.py
 ```
-Or:
+macOS/Linux (after activating the venv):
 ```bash
 streamlit run logger_gui.py
+```
+
+### macOS/Linux setup (venv activation)
+If you're on macOS or Linux, create and activate the virtual environment first:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
 ## Features
