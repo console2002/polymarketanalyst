@@ -22,6 +22,8 @@ from fetch_current_polymarket import resolve_current_market
 from websocket_logger import PolymarketWebsocketLogger, STALE_THRESHOLD_SECONDS
 
 LOGGING_INTERVAL_SECONDS = 1
+NO_UPDATE_WARNING_SECONDS = 45
+STATUS_CHECK_INTERVAL_SECONDS = 5
 TIMEZONE_ET = pytz.timezone("US/Eastern")
 TIMEZONE_UK = pytz.timezone("Europe/London")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
@@ -161,6 +163,9 @@ class PriceAggregator:
         self.latest = {}
         self.last_logged = {}
         self.last_log_time = None
+        self.last_price_update_time = None
+        self._last_warning_time = None
+        self._start_time = datetime.datetime.now(pytz.utc)
         self.outcome_order = market_info.get("outcomes") or []
         self._current_file_path = None
         self._current_file_handle = None
@@ -169,11 +174,15 @@ class PriceAggregator:
 
     async def handle_update(self, update):
         outcome = update["outcome"]
+        update_timestamp = update.get("timestamp") or datetime.datetime.now(pytz.utc)
+        if update_timestamp.tzinfo is None:
+            update_timestamp = pytz.utc.localize(update_timestamp)
+        self.last_price_update_time = update_timestamp
         self.latest[outcome] = update
         if not self._has_both_outcomes():
             return
 
-        now = update["timestamp"]
+        now = update_timestamp
         prices_changed = self._prices_changed()
         interval_elapsed = (
             self.last_log_time is None
@@ -182,6 +191,41 @@ class PriceAggregator:
 
         if prices_changed or interval_elapsed:
             self._log_row(now)
+
+    async def monitor_no_updates(
+        self,
+        warning_seconds=NO_UPDATE_WARNING_SECONDS,
+        check_interval=STATUS_CHECK_INTERVAL_SECONDS,
+    ):
+        while True:
+            await asyncio.sleep(check_interval)
+            now = datetime.datetime.now(pytz.utc)
+            last_update = self.last_price_update_time or self._start_time
+            age_seconds = max(0.0, (now - last_update).total_seconds())
+            warn_due = age_seconds >= warning_seconds
+            should_warn = warn_due and (
+                self._last_warning_time is None
+                or (now - self._last_warning_time).total_seconds() >= warning_seconds
+            )
+            if should_warn:
+                timestamp_et = _format_timestamp(now, TIMEZONE_ET)
+                last_update_str = _format_timestamp(last_update, TIMEZONE_ET)
+                print(
+                    f"[{timestamp_et}] Warning: No websocket updates for "
+                    f"{round(age_seconds, 1)}s (last update {last_update_str}). "
+                    "Waiting for new data before writing CSV."
+                )
+                self._last_warning_time = now
+            if self._broadcaster and warn_due:
+                self._broadcaster.publish(
+                    {
+                        "type": "status",
+                        "timestamp": _format_timestamp_utc(now),
+                        "last_update": _format_timestamp_utc(last_update),
+                        "seconds_since_update": round(age_seconds, 1),
+                        "warning": True,
+                    }
+                )
 
     def _has_both_outcomes(self):
         return len(self.latest) >= 2
@@ -331,6 +375,7 @@ async def run_logger(broadcaster=None, stop_event=None):
         stop_event = asyncio.Event()
     stop_task = asyncio.create_task(stop_event.wait())
     logger_task = asyncio.create_task(ws_logger.run())
+    monitor_task = asyncio.create_task(aggregator.monitor_no_updates())
     try:
         done, _ = await asyncio.wait(
             [logger_task, stop_task],
@@ -342,10 +387,13 @@ async def run_logger(broadcaster=None, stop_event=None):
                 await asyncio.wait_for(logger_task, timeout=5)
     finally:
         stop_task.cancel()
+        monitor_task.cancel()
         if not logger_task.done():
             logger_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await logger_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await monitor_task
         if broadcaster:
             await broadcaster.stop()
 
