@@ -115,14 +115,27 @@ class LoggerStreamBroadcaster:
         self._shutdown = asyncio.Event()
 
     async def start(self):
-        self._server = await websockets.serve(
-            self._handle_client,
-            self.host,
-            self.port,
-            process_request=self._process_request,
-        )
+        try:
+            self._server = await websockets.serve(
+                self._handle_client,
+                self.host,
+                self.port,
+                process_request=self._process_request,
+                reuse_address=True,
+            )
+        except OSError as exc:
+            if exc.errno in {98, 10048}:
+                print(
+                    "UI stream unavailable: could not bind to "
+                    f"ws://{self.host}:{self.port} (address already in use). "
+                    "Another logger may still be running, or the socket has not been "
+                    "released yet. Use --ui-stream-port to pick a different port."
+                )
+                return False
+            raise
         self._task = asyncio.create_task(self._broadcast_loop())
         print(f"UI stream available at ws://{self.host}:{self.port}")
+        return True
 
     async def stop(self):
         self._shutdown.set()
@@ -414,7 +427,10 @@ async def run_logger(broadcaster=None, stop_event=None):
     _ensure_csv(_get_data_file(datetime.datetime.now(pytz.utc)))
     ws_logger = PolymarketWebsocketLogger(market_info, aggregator.handle_update)
     if broadcaster:
-        await broadcaster.start()
+        started = await broadcaster.start()
+        if not started:
+            broadcaster = None
+            aggregator._broadcaster = None
     if stop_event is None:
         stop_event = asyncio.Event()
     stop_task = asyncio.create_task(stop_event.wait())
