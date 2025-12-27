@@ -283,7 +283,9 @@ class PolymarketWebsocketLogger:
         if event_type in ("heartbeat", "heart_beat"):
             return
 
-        if event_type in ("book", "snapshot", "book_snapshot") and (bids or asks):
+        if event_type in ("book", "snapshot", "book_snapshot") and (
+            bids is not None or asks is not None
+        ):
             if bids is not None:
                 book.replace_levels("bids", _parse_levels(bids))
             if asks is not None:
@@ -291,7 +293,9 @@ class PolymarketWebsocketLogger:
             await self._emit_price_update(token_id)
             return
 
-        if event_type in ("book_delta", "delta", "update") and (bids or asks):
+        if event_type in ("book_delta", "delta", "update") and (
+            bids is not None or asks is not None
+        ):
             if bids is not None:
                 book.update_levels("bids", _parse_levels(bids))
             if asks is not None:
