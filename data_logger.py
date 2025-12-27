@@ -198,7 +198,7 @@ class PriceAggregator:
         self.latest = {}
         self.last_logged = {}
         self.last_log_time = None
-        self.last_price_update_time = None
+        self.last_update_ts = None
         self._last_warning_time = None
         self._start_time = datetime.datetime.now(pytz.utc)
         self.outcome_order = market_info.get("outcomes") or []
@@ -209,10 +209,14 @@ class PriceAggregator:
 
     async def handle_update(self, update):
         outcome = update["outcome"]
-        update_timestamp = update.get("timestamp") or datetime.datetime.now(pytz.utc)
+        update_timestamp = (
+            update.get("last_update_ts")
+            or update.get("timestamp")
+            or datetime.datetime.now(pytz.utc)
+        )
         if update_timestamp.tzinfo is None:
             update_timestamp = pytz.utc.localize(update_timestamp)
-        self.last_price_update_time = update_timestamp
+        self.last_update_ts = update_timestamp
         self.latest[outcome] = update
         if not self._has_both_outcomes():
             return
@@ -235,7 +239,7 @@ class PriceAggregator:
         while True:
             await asyncio.sleep(check_interval)
             now = datetime.datetime.now(pytz.utc)
-            last_update = self.last_price_update_time or self._start_time
+            last_update = self.last_update_ts or self._start_time
             age_seconds = max(0.0, (now - last_update).total_seconds())
             warn_due = age_seconds >= warning_seconds
             should_warn = warn_due and (
@@ -251,14 +255,15 @@ class PriceAggregator:
                     "Waiting for new data before writing CSV."
                 )
                 self._last_warning_time = now
-            if self._broadcaster and warn_due:
+            if self._broadcaster:
                 self._broadcaster.publish(
                     {
                         "type": "status",
                         "timestamp": _format_timestamp_utc(now),
                         "last_update": _format_timestamp_utc(last_update),
                         "seconds_since_update": round(age_seconds, 1),
-                        "warning": True,
+                        "warning": warn_due,
+                        "status": "warning" if warn_due else "ok",
                     }
                 )
 
@@ -403,6 +408,7 @@ async def run_logger(broadcaster=None, stop_event=None):
         return
 
     aggregator = PriceAggregator(market_info, broadcaster=broadcaster)
+    _ensure_csv(_get_data_file(datetime.datetime.now(pytz.utc)))
     ws_logger = PolymarketWebsocketLogger(market_info, aggregator.handle_update)
     if broadcaster:
         await broadcaster.start()
