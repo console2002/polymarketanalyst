@@ -91,8 +91,8 @@ entry_threshold = st.sidebar.number_input(
 )
 resample_interval = st.sidebar.selectbox(
     "Resample interval",
-    options=("5s", "15s", "30s", "60s"),
-    index=0,
+    options=("1s", "5s", "15s", "30s", "60s", "all"),
+    index=1,
 )
 liquidity_aggregation = st.sidebar.selectbox(
     "Liquidity aggregation",
@@ -221,7 +221,7 @@ with col_top2:
 
 
 def _resample_market_data(df, time_column, interval, liquidity_aggregation):
-    if df.empty or not interval:
+    if df.empty or not interval or interval == "all":
         return df
     volume_agg = "sum" if liquidity_aggregation == "sum" else "mean"
     resampled_groups = []
@@ -260,6 +260,16 @@ def _last_non_zero(series):
     if cleaned.empty:
         return np.nan
     return cleaned.iloc[-1]
+
+def _infer_interval_seconds(timestamp_series):
+    cleaned = timestamp_series.dropna().sort_values()
+    diffs = cleaned.diff().dropna()
+    if diffs.empty:
+        return 1
+    median_seconds = diffs.median().total_seconds()
+    if np.isnan(median_seconds) or median_seconds <= 0:
+        return 1
+    return max(1, int(round(median_seconds)))
 
 
 def _get_close_prices(market_group, time_column):
@@ -389,7 +399,10 @@ def render_dashboard():
             np.nan,
         )
 
-        interval_seconds = pd.Timedelta(resample_interval).total_seconds()
+        if resample_interval == "all":
+            interval_seconds = _infer_interval_seconds(df_chart[time_column])
+        else:
+            interval_seconds = pd.Timedelta(resample_interval).total_seconds()
         momentum_window_points = max(1, int(momentum_window_seconds / interval_seconds))
 
         df_chart["UpPrice_Momentum"] = (
