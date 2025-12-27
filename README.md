@@ -2,41 +2,64 @@
 
 A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down prediction markets**. Features real-time data logging and an interactive dashboard for analyzing market behavior and identifying potential opportunities.
 
-## Quickstart
-Run setup (Windows):
+## Quickstart (Windows)
+
+### 1) Install dependencies
+
+Run the installer from the project root:
+
 ```bat
 install.bat
 ```
 
-### Quickstart flow (Windows)
-1. Run `install.bat`
-2. Activate the venv (or use `.\.venv\Scripts\python.exe` directly)
-3. Start the logger
-4. Start the GUI with `streamlit run logger_gui.py`
+### 2) Activate the virtual environment
 
-> **Note:** Do not run `python logger_gui.py` directly; Streamlit must be launched with `streamlit run`.
+Either activate it:
 
-### Logger only (CSV output)
 ```bat
-.\.venv\Scripts\python.exe data_logger.py
+.\.venv\Scripts\activate
 ```
 
-### Logger + GUI (two terminals)
-Terminal 1 (logger with UI stream):
+Or run Python directly from the venv in every command:
+
+```bat
+.\.venv\Scripts\python.exe --version
+```
+
+### 3) Start the logger
+
 ```bat
 .\.venv\Scripts\python.exe data_logger.py --ui-stream
 ```
-Terminal 2 (GUI):
+
+### 4) Start the GUI (in a new terminal)
+
+IMPORTANT: Streamlit must be launched with `streamlit run`, not `python logger_gui.py`.
+
 ```bat
 .\.venv\Scripts\python.exe -m streamlit run logger_gui.py
 ```
 
-### macOS/Linux setup (venv activation)
-If you're on macOS or Linux, create and activate the virtual environment first:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
+Running `python logger_gui.py` directly will show a warning and won’t launch the Streamlit UI. Always use `streamlit run`.
+
+### Logger only (no GUI)
+
+```bat
+.\.venv\Scripts\python.exe data_logger.py --ui-stream
+```
+
+### GUI + Logger (recommended)
+
+Terminal 1:
+
+```bat
+.\.venv\Scripts\python.exe data_logger.py --ui-stream
+```
+
+Terminal 2:
+
+```bat
+.\.venv\Scripts\python.exe -m streamlit run logger_gui.py
 ```
 
 ## Features
