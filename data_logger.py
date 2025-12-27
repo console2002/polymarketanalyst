@@ -7,7 +7,7 @@ import os
 import pytz
 
 from fetch_current_polymarket import fetch_polymarket_data_struct
-from websocket_logger import PolymarketWebsocketLogger
+from websocket_logger import PolymarketWebsocketLogger, STALE_THRESHOLD_SECONDS
 
 LOGGING_INTERVAL_SECONDS = 1
 TIMEZONE_ET = pytz.timezone("US/Eastern")
@@ -82,7 +82,10 @@ def _ensure_csv(file_path):
                     "DownStreamSeqId",
                     "HeartbeatLastSeen",
                     "ReconnectCount",
-                    "IsStale",
+                    "UpIsStale",
+                    "DownIsStale",
+                    "UpStaleAgeSeconds",
+                    "DownStaleAgeSeconds",
                     "LocalTimeUtc",
                 ]
             )
@@ -149,6 +152,8 @@ class PriceAggregator:
             return
         up_update = self.latest[up_key]
         down_update = self.latest[down_key]
+        up_is_stale, up_stale_age = self._stale_info(up_update, timestamp_dt)
+        down_is_stale, down_stale_age = self._stale_info(down_update, timestamp_dt)
 
         timestamp_et = _format_timestamp(timestamp_dt, TIMEZONE_ET)
         timestamp_uk = _format_timestamp(timestamp_dt, TIMEZONE_UK)
@@ -191,7 +196,10 @@ class PriceAggregator:
             down_update.get("stream_seq_id"),
             _format_timestamp_utc(up_update.get("heartbeat_last_seen")),
             up_update.get("reconnect_count"),
-            up_update.get("is_stale"),
+            up_is_stale,
+            down_is_stale,
+            up_stale_age,
+            down_stale_age,
             _format_timestamp_utc(local_time_utc),
         ]
 
@@ -208,7 +216,8 @@ class PriceAggregator:
         self.last_log_time = timestamp_dt
         print(
             f"[{timestamp_et}] Logged: Up={up_update['best_ask']}, "
-            f"Down={down_update['best_ask']}"
+            f"Down={down_update['best_ask']}, "
+            f"Stale={up_is_stale or down_is_stale}"
         )
 
     def _ordered_outcomes(self):
@@ -218,6 +227,17 @@ class PriceAggregator:
         if len(outcomes) >= 2:
             return outcomes[0], outcomes[1]
         return None, None
+
+    @staticmethod
+    def _stale_info(update, timestamp_dt):
+        last_update = update.get("last_update_ts") or update.get("timestamp")
+        if not last_update:
+            return True, ""
+        if last_update.tzinfo is None:
+            last_update = pytz.utc.localize(last_update)
+        age_seconds = max(0.0, (timestamp_dt - last_update).total_seconds())
+        is_stale = age_seconds > STALE_THRESHOLD_SECONDS
+        return is_stale, round(age_seconds, 3)
 
 
 async def run_logger():

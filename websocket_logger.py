@@ -12,7 +12,7 @@ RTDS_WS_URL = "wss://ws-live-data.polymarket.com"
 CLOB_HEARTBEAT_SECONDS = 10
 RTDS_HEARTBEAT_SECONDS = 5
 MAX_BACKOFF_SECONDS = 60
-STALE_THRESHOLD_SECONDS = CLOB_HEARTBEAT_SECONDS * 2
+STALE_THRESHOLD_SECONDS = 15
 
 
 @dataclass
@@ -161,6 +161,7 @@ class PolymarketWebsocketLogger:
         }
         self.last_server_time = {str(token_id): None for token_id in market_info["clob_token_ids"]}
         self.last_stream_seq_id = {str(token_id): None for token_id in market_info["clob_token_ids"]}
+        self.last_update = {str(token_id): None for token_id in market_info["clob_token_ids"]}
         self.last_heartbeat = None
         self.reconnect_count = 0
         self._shutdown = asyncio.Event()
@@ -356,10 +357,7 @@ class PolymarketWebsocketLogger:
         stream_seq_id = self.last_stream_seq_id.get(token_id)
         heartbeat_last_seen = self.last_heartbeat
         now = datetime.datetime.now(pytz.utc)
-        is_stale = (
-            heartbeat_last_seen is None
-            or (now - heartbeat_last_seen).total_seconds() > STALE_THRESHOLD_SECONDS
-        )
+        self.last_update[token_id] = now
         payload = {
             "timestamp": now,
             "token_id": token_id,
@@ -379,7 +377,7 @@ class PolymarketWebsocketLogger:
             "stream_seq_id": stream_seq_id,
             "heartbeat_last_seen": heartbeat_last_seen,
             "reconnect_count": self.reconnect_count,
-            "is_stale": is_stale,
+            "last_update_ts": self.last_update[token_id],
         }
         await self.on_price_update(payload)
 
