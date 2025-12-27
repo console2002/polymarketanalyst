@@ -9,6 +9,8 @@ import pandas as pd
 import streamlit as st
 import websockets
 
+from get_current_markets import get_available_market_urls, get_current_market_urls
+
 DEFAULT_WS_URL = "ws://127.0.0.1:8765"
 
 
@@ -69,6 +71,13 @@ def _drain_messages():
         st.session_state.last_update = latest_update
 
 
+def _format_market_label(market):
+    start_et = market["target_time_et"]
+    expiration_utc = market["expiration_time_utc"]
+    slug = market["polymarket"].split("/")[-1]
+    return f"{start_et:%b %d %I:%M %p ET} → {expiration_utc:%H:%M UTC} ({slug})"
+
+
 st.set_page_config(page_title="Polymarket Logger GUI", layout="wide")
 
 st.sidebar.header("Logger GUI")
@@ -81,11 +90,41 @@ refresh_interval = st.sidebar.number_input(
     value=1.0,
     step=0.5,
 )
+st.sidebar.subheader("Market Selection")
+market_options = get_available_market_urls()
+current_market = get_current_market_urls()
+market_by_url = {market["polymarket"]: market for market in market_options}
+option_urls = list(market_by_url.keys())
+current_url = current_market["polymarket"]
+default_index = option_urls.index(current_url) if current_url in option_urls else 0
+override_market = st.sidebar.checkbox(
+    "Override auto market",
+    value=False,
+    help="Overrides the GUI display only. The logger remains unchanged unless restarted.",
+)
+selected_url = st.sidebar.selectbox(
+    "Available markets",
+    options=option_urls,
+    index=default_index,
+    format_func=lambda url: _format_market_label(market_by_url[url]),
+    disabled=not override_market,
+    key="market_selection_url",
+)
+if override_market:
+    selected_market = market_by_url[selected_url]
+    if selected_url != current_url:
+        st.sidebar.info(
+            "Selection affects the GUI display only. Restart the logger to switch feeds."
+        )
+else:
+    selected_market = current_market
+    st.sidebar.caption("Auto-advance enabled (next 15-minute market).")
 
 _ensure_listener(ws_url)
 _drain_messages()
 
 st.title("Live Logger Feed")
+st.caption(f"GUI Market: {selected_market['polymarket']}")
 last_update = st.session_state.last_update
 if last_update:
     st.caption(f"Last update (UTC): {last_update}")
