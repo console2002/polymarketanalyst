@@ -8,11 +8,12 @@ best-effort and may be dropped under load to preserve logging performance.
 
 import argparse
 import asyncio
+import contextlib
 import csv
 import datetime
 import json
 import os
-import contextlib
+import signal
 
 import pytz
 import websockets
@@ -316,7 +317,7 @@ class PriceAggregator:
         return max(numeric_ages)
 
 
-async def run_logger(broadcaster=None):
+async def run_logger(broadcaster=None, stop_event=None):
     market_info, err = resolve_current_market()
     if err:
         print(f"Error: {err}")
@@ -326,11 +327,40 @@ async def run_logger(broadcaster=None):
     ws_logger = PolymarketWebsocketLogger(market_info, aggregator.handle_update)
     if broadcaster:
         await broadcaster.start()
+    if stop_event is None:
+        stop_event = asyncio.Event()
+    stop_task = asyncio.create_task(stop_event.wait())
+    logger_task = asyncio.create_task(ws_logger.run())
     try:
-        await ws_logger.run()
+        done, _ = await asyncio.wait(
+            [logger_task, stop_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if stop_event.is_set() and logger_task not in done:
+            await ws_logger.shutdown()
+            with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                await asyncio.wait_for(logger_task, timeout=5)
     finally:
+        stop_task.cancel()
+        if not logger_task.done():
+            logger_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await logger_task
         if broadcaster:
             await broadcaster.stop()
+
+
+def _install_signal_handlers(stop_event):
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(signum, stop_event.set)
+
+
+async def _run_with_signals(broadcaster):
+    stop_event = asyncio.Event()
+    _install_signal_handlers(stop_event)
+    await run_logger(broadcaster, stop_event=stop_event)
 
 
 def main():
@@ -363,7 +393,7 @@ def main():
             port=args.ui_stream_port,
         )
     try:
-        asyncio.run(run_logger(broadcaster))
+        asyncio.run(_run_with_signals(broadcaster))
     except KeyboardInterrupt:
         print("\nStopping logger...")
 
