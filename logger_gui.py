@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -76,10 +76,14 @@ def _drain_messages():
             payload = json.loads(message)
         except json.JSONDecodeError:
             continue
+        payload_timestamp = payload.get("timestamp")
+        if payload_timestamp:
+            latest_update = payload_timestamp
         rows = payload.get("rows") or []
         if rows:
             latest_rows = rows
-            latest_update = payload.get("timestamp")
+            if not latest_update:
+                latest_update = payload.get("timestamp")
             for row in rows:
                 rolling_rows.append(
                     {
@@ -99,6 +103,22 @@ def _drain_messages():
         st.session_state.rolling_rows = rolling_rows[-max_rows:]
     else:
         st.session_state.rolling_rows = []
+
+
+def _parse_last_update(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _format_market_label(market):
@@ -178,12 +198,6 @@ if stop_clicked and logger_running:
     logger_running = False
     st.sidebar.info("Stop signal sent to logger.")
 
-status_label = "Running" if logger_running else "Stopped"
-if logger_running:
-    st.sidebar.success(f"Status: {status_label} (PID {logger_proc.pid})")
-else:
-    st.sidebar.warning(f"Status: {status_label}")
-
 auto_refresh = st.sidebar.checkbox("Auto-refresh", value=True)
 refresh_interval = st.sidebar.number_input(
     "Refresh interval (seconds)",
@@ -233,10 +247,26 @@ else:
 _ensure_listener(ws_url)
 _drain_messages()
 
-st.title("Live Logger Feed")
-st.caption(f"Logger status: {'Running' if logger_running else 'Stopped'}")
-st.caption(f"GUI Market: {selected_market['polymarket']}")
 last_update = st.session_state.last_update
+last_update_dt = _parse_last_update(last_update)
+stream_active = (
+    last_update_dt is not None
+    and (datetime.now(timezone.utc) - last_update_dt).total_seconds() < 15
+)
+
+status_label = "Running (stream active)" if stream_active else "Stopped/No data"
+if stream_active:
+    st.sidebar.success(f"Status: {status_label}")
+else:
+    st.sidebar.warning(f"Status: {status_label}")
+if logger_running:
+    st.sidebar.caption(f"Local logger process: running (PID {logger_proc.pid})")
+else:
+    st.sidebar.caption("Local logger process: not running")
+
+st.title("Live Logger Feed")
+st.caption(f"Logger status: {status_label}")
+st.caption(f"GUI Market: {selected_market['polymarket']}")
 if last_update:
     st.caption(f"Last update (UTC): {last_update}")
 else:
