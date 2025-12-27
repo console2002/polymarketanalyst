@@ -2,13 +2,39 @@
 
 A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down prediction markets**. Features real-time data logging and an interactive dashboard for analyzing market behavior and identifying potential opportunities.
 
+## Quickstart
+Run setup (optional if you already have dependencies installed):
+```bat
+setup.bat
+```
+
+### Logger only (CSV output)
+```bash
+python data_logger.py
+```
+
+### GUI only (connects to an existing logger stream)
+```bash
+streamlit run logger_gui.py
+```
+
+### GUI + logger (recommended)
+Start the logger with the WebSocket UI stream enabled:
+```bash
+python data_logger.py --ui-stream
+```
+Then, in a new terminal:
+```bash
+streamlit run logger_gui.py
+```
+
 ## Features
 Recent updates have brought significant improvements to both the backtesting capabilities and the data logging service, enhancing overall analysis and strategy development.
 
 ### Data Collection
 - **Automated Market Detection**: Automatically finds the currently active 15-minute BTC market
 - **Real-time Data Logging**: Continuously fetches and logs market data.
-- **CSV Storage**: Historical data stored in `market_data.csv` for analysis, with optional daily rotation.
+- **CSV Storage**: Historical data stored in daily CSV files (one per day) for analysis.
 
 ### Interactive Dashboard
 - **Live Auto-Refresh**: Automatically updates periodically (every second) to ensure the latest data is displayed.
@@ -97,6 +123,52 @@ This script will analyze historical data for arbitrage opportunities and report 
 - Hover over the charts to see exact values with the unified crosshair
 - The charts are linked - zooming one automatically zooms the other
 
+## What gets logged
+The logger writes a row per outcome (Up and Down) each time it logs. Files are created per day using US/Eastern dates (e.g., `24032025.csv`).
+
+| Column | Description |
+| --- | --- |
+| `timestamp_et` | Logger timestamp in US/Eastern (ET). |
+| `timestamp_uk` | Logger timestamp in Europe/London. |
+| `target_time_uk` | Market start time in UK time (15-minute window start). |
+| `expiration_uk` | Market expiration time in UK time (15-minute window end). |
+| `server_time_utc` | Polymarket server time (UTC) reported with the quote. |
+| `local_time_utc` | Local logger time (UTC) when the row was written. |
+| `stream_seq_id` | Sequence ID from the quote stream. |
+| `token_id` | CLOB token ID for the outcome. |
+| `outcome` | Outcome label (e.g., Up/Down). |
+| `best_bid` | Current best bid price. |
+| `best_ask` | Current best ask price. |
+| `mid` | Midpoint of best bid and best ask. |
+| `spread` | Best ask minus best bid. |
+| `spread_pct` | Spread as a percentage of the mid. |
+| `best_bid_size` | Size at the best bid. |
+| `best_ask_size` | Size at the best ask. |
+| `last_trade_price` | Most recent trade price (if available). |
+| `last_trade_size` | Most recent trade size (if available). |
+| `last_trade_side` | Most recent trade side (buy/sell). |
+| `last_trade_ts` | Most recent trade timestamp (UTC). |
+| `heartbeat_last_seen` | Last heartbeat time from the stream (UTC). |
+| `reconnect_count` | Number of reconnects since start. |
+| `is_stale` | Whether the data is stale per the logger threshold. |
+| `stale_age_seconds` | Age in seconds since the last update. |
+
+## Daily file rotation
+The logger writes to one CSV file per day using the US/Eastern date (format `DDMMYYYY.csv`). At midnight ET, it switches to a new file automatically.
+
+## Default market selection
+By default, the logger tracks the **current 15-minute market**: the contract that expires at the next 15-minute boundary. The GUI mirrors this behavior and auto-advances, but you can override the display in the sidebar without changing the logger (restart the logger to switch feeds).
+
+## FAQ
+**Why does the GUI say “Waiting for updates”?**  
+Make sure the logger is running with `--ui-stream` and that the GUI is pointing to the same WebSocket URL (default `ws://127.0.0.1:8765`).
+
+**Why is the data marked stale?**  
+If the stream pauses or Polymarket stops sending updates, the logger flags the row as stale once it exceeds the staleness threshold. This is informational and does not stop logging.
+
+**Why do I see reconnects?**  
+The WebSocket client will reconnect automatically on transient network issues. Reconnect counts are tracked in the CSV to help diagnose interruptions.
+
 ## How It Works
 
 The system identifies the **Active Market** by finding the 15-minute interval that has started but not yet expired:
@@ -119,7 +191,7 @@ PolymarketAnalyst/
 ├── get_current_markets.py       # Script to get current markets
 ├── .gitignore                   # Specifies intentionally untracked files to ignore
 ├── README.md                    # This file
-└── market_data.csv              # Historical data (auto-generated and used by dashboard)
+└── *.csv                         # Daily historical data (auto-generated and used by dashboard)
 ```
 
 ## Contributing
