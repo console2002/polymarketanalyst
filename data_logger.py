@@ -1,7 +1,6 @@
 import asyncio
 import csv
 import datetime
-import math
 import os
 
 import pytz
@@ -92,16 +91,6 @@ def _ensure_csv(file_path):
         print(f"Created {file_path}")
 
 
-def _align_timestamp_to_interval(timestamp_dt, interval_seconds):
-    if not timestamp_dt:
-        timestamp_dt = datetime.datetime.now(pytz.utc)
-    if timestamp_dt.tzinfo is None:
-        timestamp_dt = pytz.utc.localize(timestamp_dt)
-    epoch_seconds = timestamp_dt.timestamp()
-    aligned_seconds = math.floor(epoch_seconds / interval_seconds) * interval_seconds
-    return datetime.datetime.fromtimestamp(aligned_seconds, tz=datetime.timezone.utc)
-
-
 class PriceAggregator:
     def __init__(self, market_info):
         self.market_info = market_info
@@ -117,15 +106,14 @@ class PriceAggregator:
             return
 
         now = update["timestamp"]
-        aligned_time = _align_timestamp_to_interval(now, LOGGING_INTERVAL_SECONDS)
         prices_changed = self._prices_changed()
         interval_elapsed = (
             self.last_log_time is None
-            or (aligned_time - self.last_log_time).total_seconds() >= LOGGING_INTERVAL_SECONDS
+            or (now - self.last_log_time).total_seconds() >= LOGGING_INTERVAL_SECONDS
         )
 
         if prices_changed or interval_elapsed:
-            self._log_row(aligned_time)
+            self._log_row(now)
 
     def _has_both_outcomes(self):
         return len(self.latest) >= 2

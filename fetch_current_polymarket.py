@@ -3,7 +3,6 @@ import json
 import time
 from email.utils import parsedate_to_datetime
 
-import pytz
 import requests
 from requests.adapters import HTTPAdapter
 from requests.exceptions import SSLError
@@ -17,7 +16,6 @@ POLYMARKET_TIMEOUT = (3, 10)
 POLYMARKET_RATE_LIMIT_SECONDS = 1
 _POLYMARKET_SESSION = None
 _LAST_POLYMARKET_CALL_AT = None
-_LAST_GOOD_POLYMARKET_DATA = None
 
 
 def _get_polymarket_session():
@@ -75,6 +73,7 @@ def _get_polymarket_event(slug):
         except Exception as e:
             return None, str(e), None
 
+
 def _parse_list_field(value):
     if value is None:
         return []
@@ -86,6 +85,7 @@ def _parse_list_field(value):
         except json.JSONDecodeError:
             return []
     return []
+
 
 def _parse_iso_datetime(value):
     if not value:
@@ -100,12 +100,14 @@ def _parse_iso_datetime(value):
             return None
     return None
 
+
 def _extract_market_times(market):
     start_time = _parse_iso_datetime(market.get("startDate")) or _parse_iso_datetime(market.get("startTime"))
     end_time = _parse_iso_datetime(market.get("endDate")) or _parse_iso_datetime(market.get("endTime"))
     if not end_time:
         end_time = _parse_iso_datetime(market.get("expiration"))
     return start_time, end_time
+
 
 def get_polymarket_metadata(slug):
     try:
@@ -141,12 +143,10 @@ def get_polymarket_metadata(slug):
         return None, str(e)
 
 
-
 def fetch_polymarket_data_struct():
     """
     Fetches current Polymarket market metadata (token IDs, outcomes, times).
     """
-    global _LAST_GOOD_POLYMARKET_DATA
     try:
         market_info = get_current_market_urls()
         polymarket_url = market_info["polymarket"]
@@ -158,11 +158,6 @@ def fetch_polymarket_data_struct():
         poly_data, poly_err = get_polymarket_metadata(slug)
 
         if poly_err:
-            if _LAST_GOOD_POLYMARKET_DATA:
-                cached = dict(_LAST_GOOD_POLYMARKET_DATA)
-                cached["is_cached"] = True
-                cached["cache_age_seconds"] = time.time() - cached.get("fetched_at", time.time())
-                return cached, None
             return None, f"Polymarket Error: {poly_err}"
 
         target_time_utc = poly_data.get("start_time") or target_time_utc
@@ -175,23 +170,7 @@ def fetch_polymarket_data_struct():
             "target_time_utc": target_time_utc,
             "expiration_time_utc": expiration_time_utc,
             "polymarket_time_utc": poly_data.get("polymarket_time_utc"),
-            "fetched_at": time.time(),
         }
-        _LAST_GOOD_POLYMARKET_DATA = result
-        return result, None        
+        return result, None
     except Exception as e:
         return None, str(e)
-
-def main():
-    data, err = fetch_polymarket_data_struct()
-
-    if err:
-        print(f"Error: {err}")
-        return
-
-    print(f"Fetching data for: {data['slug']}")
-    print(f"Target Time (UTC): {data['target_time_utc']}")
-    print(f"Outcome tokens: {data['clob_token_ids']}")
-
-if __name__ == "__main__":
-    main()
