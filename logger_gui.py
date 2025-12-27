@@ -9,6 +9,7 @@ import json
 import os
 import queue
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -23,6 +24,7 @@ import websockets
 from get_current_markets import get_available_market_urls, get_current_market_urls
 
 DEFAULT_WS_URL = "ws://127.0.0.1:8765"
+LAUNCH_LOG_MAX_LINES = 20
 
 
 def _listener_worker(url, out_queue, stop_event):
@@ -59,6 +61,32 @@ def _ensure_listener(url):
     st.session_state.last_rows = []
     st.session_state.last_update = None
     st.session_state.rolling_rows = []
+
+
+def _ensure_launch_log():
+    if "launch_log" not in st.session_state:
+        st.session_state.launch_log = []
+    if "launch_log_queue" not in st.session_state:
+        st.session_state.launch_log_queue = queue.Queue()
+
+
+def _append_launch_log(line):
+    logs = st.session_state.launch_log
+    logs.append(line)
+    st.session_state.launch_log = logs[-LAUNCH_LOG_MAX_LINES:]
+
+
+def _drain_launch_log_queue():
+    log_queue = st.session_state.get("launch_log_queue")
+    if not log_queue:
+        return
+    timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    while True:
+        try:
+            line = log_queue.get_nowait()
+        except queue.Empty:
+            break
+        _append_launch_log(f"{timestamp} {line}")
 
 
 def _drain_messages():
@@ -144,6 +172,24 @@ def _parse_ws_target(ws_url):
     return scheme, host, port
 
 
+def _is_ws_reachable(host, port, timeout=0.5):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _enqueue_process_output(stream, label, out_queue):
+    if stream is None:
+        return
+    for line in iter(stream.readline, ""):
+        if not line:
+            break
+        out_queue.put(f"{label}: {line.rstrip()}")
+    stream.close()
+
+
 def _start_logger_process(host, port):
     logger_path = os.path.join(os.path.dirname(__file__), "data_logger.py")
     command = [
@@ -155,12 +201,33 @@ def _start_logger_process(host, port):
         "--ui-stream-port",
         str(port),
     ]
-    return subprocess.Popen(
-        command,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    try:
+        proc = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return None, f"Failed to launch logger: {exc}"
+
+    log_queue = st.session_state.get("launch_log_queue")
+    if log_queue is not None:
+        stdout_thread = threading.Thread(
+            target=_enqueue_process_output,
+            args=(proc.stdout, "stdout", log_queue),
+            daemon=True,
+        )
+        stderr_thread = threading.Thread(
+            target=_enqueue_process_output,
+            args=(proc.stderr, "stderr", log_queue),
+            daemon=True,
+        )
+        stdout_thread.start()
+        stderr_thread.start()
+    return proc, None
 
 
 st.set_page_config(page_title="Polymarket Logger GUI", layout="wide")
@@ -174,13 +241,20 @@ scheme, host, port = _parse_ws_target(ws_url)
 logger_proc = _get_logger_process()
 logger_running = logger_proc is not None
 can_manage_logger = scheme in {"ws", ""} and host in {"127.0.0.1", "localhost"}
+_ensure_launch_log()
+_drain_launch_log_queue()
 st.sidebar.subheader("Logger Control")
 if not can_manage_logger:
     st.sidebar.info("Start/Stop is available only for local ws:// endpoints.")
 
+endpoint_reachable = can_manage_logger and _is_ws_reachable(host, port)
+logger_already_running = endpoint_reachable and not logger_running
+if logger_already_running:
+    st.sidebar.warning("Logger already running.")
+
 start_clicked = st.sidebar.button(
     "Start Logger",
-    disabled=logger_running or not can_manage_logger,
+    disabled=logger_running or logger_already_running or not can_manage_logger,
     help="Launch data_logger.py in a background process with UI streaming enabled.",
 )
 stop_clicked = st.sidebar.button(
@@ -189,14 +263,42 @@ stop_clicked = st.sidebar.button(
     help="Send SIGINT for a graceful shutdown.",
 )
 if start_clicked and not logger_running and can_manage_logger:
-    logger_proc = _start_logger_process(host, port)
-    st.session_state.logger_process = logger_proc
-    logger_running = True
-    st.sidebar.success("Logger process started.")
+    st.session_state.logger_error = None
+    _append_launch_log("Attempting logger start.")
+    logger_proc, start_error = _start_logger_process(host, port)
+    time.sleep(0.5)
+    _drain_launch_log_queue()
+    if start_error:
+        st.session_state.logger_error = start_error
+        logger_proc = None
+        logger_running = False
+    elif logger_proc and logger_proc.poll() is None:
+        st.session_state.logger_process = logger_proc
+        logger_running = True
+        st.sidebar.success("Logger process started.")
+        _append_launch_log("Logger start succeeded.")
+    else:
+        exit_code = logger_proc.poll() if logger_proc else "unknown"
+        st.session_state.logger_error = (
+            f"Logger failed to start (exit code {exit_code}). Check launch log."
+        )
+        logger_proc = None
+        logger_running = False
 if stop_clicked and logger_running:
     logger_proc.send_signal(signal.SIGINT)
     logger_running = False
     st.sidebar.info("Stop signal sent to logger.")
+    _append_launch_log("Stop signal sent to logger.")
+
+if st.session_state.get("logger_error"):
+    st.sidebar.error(st.session_state.logger_error)
+
+with st.sidebar.expander("Launch log", expanded=False):
+    launch_log = st.session_state.get("launch_log", [])
+    if launch_log:
+        st.text("\n".join(launch_log))
+    else:
+        st.caption("No launch messages yet.")
 
 auto_refresh = st.sidebar.checkbox("Auto-refresh", value=True)
 refresh_interval = st.sidebar.number_input(
