@@ -138,13 +138,6 @@ def _find_server_time(payload):
     return None
 
 
-def _find_stream_seq_id(payload):
-    for key in ("sequence", "seq_id", "seqId", "update_id", "updateId"):
-        if key in payload:
-            return payload[key]
-    return None
-
-
 def _normalize_trade_side(value):
     if not value:
         return ""
@@ -178,11 +171,9 @@ class PolymarketWebsocketLogger:
             for token_id in market_info["clob_token_ids"]
         }
         self.last_server_time = {str(token_id): None for token_id in market_info["clob_token_ids"]}
-        self.last_stream_seq_id = {str(token_id): None for token_id in market_info["clob_token_ids"]}
         self.last_update = {str(token_id): None for token_id in market_info["clob_token_ids"]}
         self.last_heartbeat = None
         self.clob_frames_received = 0
-        self.reconnect_count = 0
         self._shutdown = asyncio.Event()
 
     async def run(self):
@@ -219,11 +210,9 @@ class PolymarketWebsocketLogger:
                     )
                     self._shutdown.set()
                     return
-                self.reconnect_count += 1
                 await asyncio.sleep(self._next_backoff(backoff))
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
             except Exception:
-                self.reconnect_count += 1
                 await asyncio.sleep(self._next_backoff(backoff))
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
 
@@ -261,8 +250,6 @@ class PolymarketWebsocketLogger:
         books = payload.get("books") or payload.get("order_books")
         price_changes = payload.get("price_changes") or payload.get("priceChanges")
         server_time = _find_server_time(payload)
-        stream_seq_id = _find_stream_seq_id(payload)
-
         if event_type in ("heartbeat", "heart_beat"):
             return
 
@@ -271,8 +258,6 @@ class PolymarketWebsocketLogger:
                 return
             if server_time:
                 self.last_server_time[token_id] = server_time
-            if stream_seq_id is not None:
-                self.last_stream_seq_id[token_id] = stream_seq_id
             book = self.order_books[token_id]
         else:
             book = None
@@ -296,8 +281,6 @@ class PolymarketWebsocketLogger:
                         continue
                     if server_time:
                         self.last_server_time[entry_token] = server_time
-                    if stream_seq_id is not None:
-                        self.last_stream_seq_id[entry_token] = stream_seq_id
                     entry_book = self.order_books[entry_token]
                     entry_bids, entry_asks = _extract_book_sides(entry)
                     if entry_bids is not None:
@@ -328,8 +311,6 @@ class PolymarketWebsocketLogger:
                     continue
                 if server_time:
                     self.last_server_time[change_token] = server_time
-                if stream_seq_id is not None:
-                    self.last_stream_seq_id[change_token] = stream_seq_id
                 side = _normalize_trade_side(change.get("side"))
                 price = change.get("price")
                 size = change.get("size")
@@ -388,7 +369,6 @@ class PolymarketWebsocketLogger:
         outcome = self.token_id_to_outcome.get(token_id, token_id)
         last_trade = self.last_trade.get(token_id, {})
         server_time = self.last_server_time.get(token_id)
-        stream_seq_id = self.last_stream_seq_id.get(token_id)
         heartbeat_last_seen = self.last_heartbeat
         now = datetime.datetime.now(pytz.utc)
         self.last_update[token_id] = now
@@ -408,9 +388,7 @@ class PolymarketWebsocketLogger:
             "last_trade_side": last_trade.get("side"),
             "last_trade_ts": last_trade.get("timestamp"),
             "server_time_utc": server_time,
-            "stream_seq_id": stream_seq_id,
             "heartbeat_last_seen": heartbeat_last_seen,
-            "reconnect_count": self.reconnect_count,
             "last_update_ts": self.last_update[token_id],
         }
         await self.on_price_update(payload)
