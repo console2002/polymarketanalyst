@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import pytz
 import websockets
 
-CLOB_WS_URL = "wss://ws-subscriptions-clob.polymarket.com"
+CLOB_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 RTDS_WS_URL = "wss://ws-live-data.polymarket.com"
 CLOB_HEARTBEAT_SECONDS = 10
 RTDS_HEARTBEAT_SECONDS = 5
@@ -71,7 +71,7 @@ def _parse_levels(raw_levels):
 
 
 def _find_token_id(payload):
-    for key in ("token_id", "tokenId", "token", "tokenID"):
+    for key in ("token_id", "tokenId", "token", "tokenID", "asset_id", "assetId"):
         if key in payload:
             return str(payload[key])
     return None
@@ -141,6 +141,18 @@ class PolymarketWebsocketLogger:
     def __init__(self, market_info, on_price_update):
         self.market_info = market_info
         self.on_price_update = on_price_update
+        self._assets_ids = [
+            str(token_id) for token_id in market_info.get("clob_token_ids", [])
+        ]
+        self._market_ids = [
+            str(value)
+            for value in (
+                market_info.get("condition_id"),
+                market_info.get("market_id"),
+                market_info.get("marketId"),
+            )
+            if value
+        ]
         self.token_id_to_outcome = {
             str(token_id): outcome
             for outcome, token_id in zip(
@@ -165,6 +177,10 @@ class PolymarketWebsocketLogger:
         self.last_heartbeat = None
         self.reconnect_count = 0
         self._shutdown = asyncio.Event()
+        self._last_clob_message_at = None
+        self._last_rtds_message_at = None
+        self._last_clob_resubscribe_at = None
+        self._last_rtds_resubscribe_at = None
 
     async def run(self):
         await asyncio.gather(
@@ -185,11 +201,13 @@ class PolymarketWebsocketLogger:
                     max_queue=None,
                 ) as ws:
                     await self._subscribe_clob(ws)
+                    watchdog = asyncio.create_task(self._clob_watchdog(ws))
                     heartbeat = asyncio.create_task(self._clob_heartbeat(ws))
                     backoff = 1
                     async for message in ws:
                         await self._handle_clob_message(message)
                     heartbeat.cancel()
+                    watchdog.cancel()
             except Exception:
                 self.reconnect_count += 1
                 await asyncio.sleep(self._next_backoff(backoff))
@@ -205,6 +223,7 @@ class PolymarketWebsocketLogger:
                     max_queue=None,
                 ) as ws:
                     await self._subscribe_rtds(ws)
+                    watchdog = asyncio.create_task(self._rtds_watchdog(ws))
                     heartbeat = asyncio.create_task(self._rtds_heartbeat(ws))
                     backoff = 1
                     async for message in ws:
@@ -212,30 +231,25 @@ class PolymarketWebsocketLogger:
                         if self._shutdown.is_set():
                             break
                     heartbeat.cancel()
+                    watchdog.cancel()
             except Exception:
                 self.reconnect_count += 1
                 await asyncio.sleep(self._next_backoff(backoff))
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
 
     async def _subscribe_clob(self, ws):
-        token_ids = [str(token_id) for token_id in self.market_info["clob_token_ids"]]
-        subscribe = {"type": "subscribe", "channel": "book", "token_ids": token_ids}
-        await ws.send(json.dumps(subscribe))
-        snapshot_request = {
-            "type": "snapshot",
-            "channel": "book",
-            "token_ids": token_ids,
-        }
-        await ws.send(json.dumps(snapshot_request))
+        payload = {"type": "market", "assets_ids": self._assets_ids}
+        await self._send_ws_payload(ws, "CLOB subscribe", payload)
 
     async def _subscribe_rtds(self, ws):
-        token_ids = [str(token_id) for token_id in self.market_info["clob_token_ids"]]
         payload = {
             "type": "subscribe",
             "channel": "trades",
-            "token_ids": token_ids,
+            "asset_ids": self._assets_ids,
         }
-        await ws.send(json.dumps(payload))
+        if self._market_ids:
+            payload["market_ids"] = self._market_ids
+        await self._send_ws_payload(ws, "RTDS subscribe", payload)
 
     async def _clob_heartbeat(self, ws):
         while not self._shutdown.is_set():
@@ -263,29 +277,35 @@ class PolymarketWebsocketLogger:
             return
 
         self._mark_heartbeat()
+        self._last_clob_message_at = datetime.datetime.now(pytz.utc)
+        self._maybe_log_ack("CLOB", payload)
         token_id = _find_token_id(payload)
-        if token_id is None:
-            return
-        if token_id not in self.order_books:
-            return
-
-        book = self.order_books[token_id]
         event_type = payload.get("event_type") or payload.get("type")
         bids = payload.get("bids")
         asks = payload.get("asks")
+        price_changes = payload.get("price_changes") or payload.get("priceChanges")
         server_time = _find_server_time(payload)
-        if server_time:
-            self.last_server_time[token_id] = server_time
         stream_seq_id = _find_stream_seq_id(payload)
-        if stream_seq_id is not None:
-            self.last_stream_seq_id[token_id] = stream_seq_id
 
         if event_type in ("heartbeat", "heart_beat"):
             return
 
+        if token_id is not None:
+            if token_id not in self.order_books:
+                return
+            if server_time:
+                self.last_server_time[token_id] = server_time
+            if stream_seq_id is not None:
+                self.last_stream_seq_id[token_id] = stream_seq_id
+            book = self.order_books[token_id]
+        else:
+            book = None
+
         if event_type in ("book", "snapshot", "book_snapshot") and (
             bids is not None or asks is not None
         ):
+            if not book:
+                return
             if bids is not None:
                 book.replace_levels("bids", _parse_levels(bids))
             if asks is not None:
@@ -296,11 +316,40 @@ class PolymarketWebsocketLogger:
         if event_type in ("book_delta", "delta", "update") and (
             bids is not None or asks is not None
         ):
+            if not book:
+                return
             if bids is not None:
                 book.update_levels("bids", _parse_levels(bids))
             if asks is not None:
                 book.update_levels("asks", _parse_levels(asks))
             await self._emit_price_update(token_id)
+            return
+
+        if event_type in ("price_change", "price_change_event") and price_changes:
+            for change in price_changes:
+                change_token = _find_token_id(change)
+                if change_token not in self.order_books:
+                    continue
+                if server_time:
+                    self.last_server_time[change_token] = server_time
+                if stream_seq_id is not None:
+                    self.last_stream_seq_id[change_token] = stream_seq_id
+                side = _normalize_trade_side(change.get("side"))
+                price = change.get("price")
+                size = change.get("size")
+                if price is None or size is None:
+                    continue
+                try:
+                    price = float(price)
+                    size = float(size)
+                except (TypeError, ValueError):
+                    continue
+                book = self.order_books[change_token]
+                if side == "buy":
+                    book.update_levels("bids", [(price, size)])
+                elif side == "sell":
+                    book.update_levels("asks", [(price, size)])
+                await self._emit_price_update(change_token)
 
     async def _handle_rtds_message(self, message):
         try:
@@ -308,6 +357,8 @@ class PolymarketWebsocketLogger:
         except json.JSONDecodeError:
             return
 
+        self._last_rtds_message_at = datetime.datetime.now(pytz.utc)
+        self._maybe_log_ack("RTDS", payload)
         token_id = _find_token_id(payload)
         trades = payload.get("trades") or payload.get("data") or payload.get("events")
         if isinstance(trades, dict):
@@ -387,6 +438,55 @@ class PolymarketWebsocketLogger:
 
     def _mark_heartbeat(self):
         self.last_heartbeat = datetime.datetime.now(pytz.utc)
+
+    async def _send_ws_payload(self, ws, label, payload):
+        print(f"{label} payload: {json.dumps(payload)}")
+        await ws.send(json.dumps(payload))
+
+    def _maybe_log_ack(self, source, payload):
+        event_type = payload.get("event_type") or payload.get("type")
+        status = payload.get("status")
+        ack_types = {"subscribed", "subscribe", "subscription", "ack", "connected", "info"}
+        if event_type in ack_types or status in ("ok", "success"):
+            print(f"{source} ack: {json.dumps(payload)}")
+
+    async def _clob_watchdog(self, ws):
+        while not self._shutdown.is_set():
+            await asyncio.sleep(STALE_THRESHOLD_SECONDS)
+            if not self._last_clob_message_at:
+                continue
+            now = datetime.datetime.now(pytz.utc)
+            stale_for = (now - self._last_clob_message_at).total_seconds()
+            if stale_for < STALE_THRESHOLD_SECONDS:
+                continue
+            last_resub = self._last_clob_resubscribe_at
+            if last_resub and (now - last_resub).total_seconds() < STALE_THRESHOLD_SECONDS:
+                continue
+            self._last_clob_resubscribe_at = now
+            payload = {"assets_ids": self._assets_ids, "operation": "subscribe"}
+            await self._send_ws_payload(ws, "CLOB resubscribe (refresh snapshot)", payload)
+
+    async def _rtds_watchdog(self, ws):
+        while not self._shutdown.is_set():
+            await asyncio.sleep(STALE_THRESHOLD_SECONDS)
+            if not self._last_rtds_message_at:
+                continue
+            now = datetime.datetime.now(pytz.utc)
+            stale_for = (now - self._last_rtds_message_at).total_seconds()
+            if stale_for < STALE_THRESHOLD_SECONDS:
+                continue
+            last_resub = self._last_rtds_resubscribe_at
+            if last_resub and (now - last_resub).total_seconds() < STALE_THRESHOLD_SECONDS:
+                continue
+            self._last_rtds_resubscribe_at = now
+            payload = {
+                "type": "subscribe",
+                "channel": "trades",
+                "asset_ids": self._assets_ids,
+            }
+            if self._market_ids:
+                payload["market_ids"] = self._market_ids
+            await self._send_ws_payload(ws, "RTDS resubscribe (refresh)", payload)
 
     @staticmethod
     def _next_backoff(current):
