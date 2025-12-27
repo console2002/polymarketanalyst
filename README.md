@@ -35,6 +35,7 @@ Or run Python directly from the venv in every command:
 ### 4) Start the GUI (in a new terminal)
 
 IMPORTANT: Streamlit must be launched with `streamlit run`, not `python logger_gui.py`.
+If Streamlit reports file in use, close any previous Streamlit processes (Task Manager or `taskkill /f /im streamlit.exe`).
 
 ```bat
 .\.venv\Scripts\python.exe -m streamlit run logger_gui.py
