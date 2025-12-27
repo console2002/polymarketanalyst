@@ -47,51 +47,34 @@ def _ensure_csv(file_path):
     if not os.path.exists(file_path):
         with open(file_path, mode="w", newline="") as file:
             writer = csv.writer(file)
+            # Required fields: timestamps, market times, IDs, best quotes/sizes, and health/staleness.
+            # Optional fields: last trade details (price/size/side/timestamp).
             writer.writerow(
                 [
-                    "Timestamp",
-                    "Timestamp_UK",
-                    "TargetTime",
-                    "Expiration",
+                    "timestamp_et",
+                    "timestamp_uk",
+                    "target_time_uk",
+                    "expiration_uk",
                     "server_time_utc",
                     "local_time_utc",
                     "stream_seq_id",
+                    "token_id",
+                    "outcome",
+                    "best_bid",
+                    "best_ask",
+                    "mid",
+                    "spread",
+                    "spread_pct",
+                    "best_bid_size",
+                    "best_ask_size",
+                    "last_trade_price",
+                    "last_trade_size",
+                    "last_trade_side",
+                    "last_trade_ts",
                     "heartbeat_last_seen",
                     "reconnect_count",
                     "is_stale",
                     "stale_age_seconds",
-                    "UpBestBid",
-                    "DownBestBid",
-                    "UpBestAsk",
-                    "DownBestAsk",
-                    "UpMidPrice",
-                    "DownMidPrice",
-                    "UpSpread",
-                    "DownSpread",
-                    "UpSpreadPct",
-                    "DownSpreadPct",
-                    "UpBidSize",
-                    "DownBidSize",
-                    "UpAskSize",
-                    "DownAskSize",
-                    "UpLastTradePrice",
-                    "DownLastTradePrice",
-                    "UpLastTradeSize",
-                    "DownLastTradeSize",
-                    "UpLastTradeSide",
-                    "DownLastTradeSide",
-                    "UpLastTradeTs",
-                    "DownLastTradeTs",
-                    "UpServerTimeUtc",
-                    "DownServerTimeUtc",
-                    "UpStreamSeqId",
-                    "DownStreamSeqId",
-                    "HeartbeatLastSeen",
-                    "ReconnectCount",
-                    "UpIsStale",
-                    "DownIsStale",
-                    "UpStaleAgeSeconds",
-                    "DownStaleAgeSeconds",
                 ]
             )
         print(f"Created {file_path}")
@@ -149,9 +132,6 @@ class PriceAggregator:
             return
         up_update = self.latest[up_key]
         down_update = self.latest[down_key]
-        up_is_stale, up_stale_age = self._stale_info(up_update, timestamp_dt)
-        down_is_stale, down_stale_age = self._stale_info(down_update, timestamp_dt)
-        event_timestamp = self._event_timestamp(up_update, down_update, timestamp_dt)
 
         timestamp_et = _format_timestamp(timestamp_dt, TIMEZONE_ET)
         timestamp_uk = _format_timestamp(timestamp_dt, TIMEZONE_UK)
@@ -160,71 +140,48 @@ class PriceAggregator:
         target_time_str = _format_timestamp(target_time, TIMEZONE_UK)
         expiration_str = _format_timestamp(expiration, TIMEZONE_UK)
         local_time_utc = datetime.datetime.now(pytz.utc)
-        stream_seq_id = up_update.get("stream_seq_id") or down_update.get("stream_seq_id")
-        heartbeat_last_seen = up_update.get("heartbeat_last_seen") or down_update.get(
-            "heartbeat_last_seen"
-        )
-        reconnect_count = up_update.get("reconnect_count")
-        if reconnect_count is None:
-            reconnect_count = down_update.get("reconnect_count")
-        stream_is_stale = up_is_stale or down_is_stale
-        stream_stale_age = self._max_stale_age(up_stale_age, down_stale_age)
+        rows = []
+        for update in (up_update, down_update):
+            is_stale, stale_age = self._stale_info(update, timestamp_dt)
+            row = [
+                timestamp_et,
+                timestamp_uk,
+                target_time_str,
+                expiration_str,
+                _format_timestamp_utc(update.get("server_time_utc")),
+                _format_timestamp_utc(local_time_utc),
+                update.get("stream_seq_id"),
+                update.get("token_id"),
+                update.get("outcome"),
+                update["best_bid"],
+                update["best_ask"],
+                update["mid"],
+                update["spread"],
+                update["spread_pct"],
+                update["best_bid_size"],
+                update["best_ask_size"],
+                update.get("last_trade_price"),
+                update.get("last_trade_size"),
+                update.get("last_trade_side"),
+                _format_timestamp_utc(update.get("last_trade_ts")),
+                _format_timestamp_utc(update.get("heartbeat_last_seen")),
+                update.get("reconnect_count"),
+                is_stale,
+                stale_age,
+            ]
+            rows.append(row)
 
-        row = [
-            timestamp_et,
-            timestamp_uk,
-            target_time_str,
-            expiration_str,
-            _format_timestamp_utc(event_timestamp),
-            _format_timestamp_utc(local_time_utc),
-            stream_seq_id,
-            _format_timestamp_utc(heartbeat_last_seen),
-            reconnect_count,
-            stream_is_stale,
-            stream_stale_age,
-            up_update["best_bid"],
-            down_update["best_bid"],
-            up_update["best_ask"],
-            down_update["best_ask"],
-            up_update["mid"],
-            down_update["mid"],
-            up_update["spread"],
-            down_update["spread"],
-            up_update["spread_pct"],
-            down_update["spread_pct"],
-            up_update["best_bid_size"],
-            down_update["best_bid_size"],
-            up_update["best_ask_size"],
-            down_update["best_ask_size"],
-            up_update.get("last_trade_price"),
-            down_update.get("last_trade_price"),
-            up_update.get("last_trade_size"),
-            down_update.get("last_trade_size"),
-            up_update.get("last_trade_side"),
-            down_update.get("last_trade_side"),
-            _format_timestamp_utc(up_update.get("last_trade_ts")),
-            _format_timestamp_utc(down_update.get("last_trade_ts")),
-            _format_timestamp_utc(up_update.get("server_time_utc")),
-            _format_timestamp_utc(down_update.get("server_time_utc")),
-            up_update.get("stream_seq_id"),
-            down_update.get("stream_seq_id"),
-            _format_timestamp_utc(up_update.get("heartbeat_last_seen")),
-            up_update.get("reconnect_count"),
-            up_is_stale,
-            down_is_stale,
-            up_stale_age,
-            down_stale_age,
-        ]
-
-        data_file = _get_data_file(event_timestamp)
+        data_file = _get_data_file(self._event_timestamp(up_update, down_update, timestamp_dt))
         writer = self._get_writer(data_file)
-        writer.writerow(row)
+        writer.writerows(rows)
 
         self.last_logged = {
             up_key: up_update,
             down_key: down_update,
         }
         self.last_log_time = timestamp_dt
+        up_is_stale, up_stale_age = self._stale_info(up_update, timestamp_dt)
+        down_is_stale, down_stale_age = self._stale_info(down_update, timestamp_dt)
         print(
             f"[{timestamp_et}] Logged: Up={up_update['best_ask']}, "
             f"Down={down_update['best_ask']}, "
