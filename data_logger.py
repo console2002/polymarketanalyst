@@ -1,3 +1,11 @@
+"""Polymarket logger.
+
+The logger runs headless by default and can optionally expose a lightweight
+WebSocket feed intended for read-only GUI consumers. The GUI should run in a
+separate process and must never block the logger's critical path. Messages are
+best-effort and may be dropped under load to preserve logging performance.
+"""
+
 import argparse
 import asyncio
 import csv
@@ -84,10 +92,11 @@ def _ensure_csv(file_path):
 
 
 class LoggerStreamBroadcaster:
-    def __init__(self, host="127.0.0.1", port=8765, max_queue=1000):
+    def __init__(self, host="127.0.0.1", port=8765, max_queue=1000, send_timeout=0.25):
         self.host = host
         self.port = port
         self.queue = asyncio.Queue(maxsize=max_queue)
+        self.send_timeout = send_timeout
         self._clients = set()
         self._server = None
         self._task = None
@@ -109,6 +118,7 @@ class LoggerStreamBroadcaster:
             await self._server.wait_closed()
 
     def publish(self, payload):
+        """Queue payloads for UI consumers without blocking the logger."""
         if self.queue.full():
             return
         self.queue.put_nowait(payload)
@@ -126,14 +136,22 @@ class LoggerStreamBroadcaster:
             message = json.dumps(payload, default=str)
             if not self._clients:
                 continue
-            to_remove = []
-            for client in self._clients:
-                try:
-                    await client.send(message)
-                except Exception:
-                    to_remove.append(client)
-            for client in to_remove:
+            clients = list(self._clients)
+            results = await asyncio.gather(
+                *[self._send_to_client(client, message) for client in clients],
+                return_exceptions=True,
+            )
+            for client, ok in zip(clients, results):
+                if ok is True:
+                    continue
                 self._clients.discard(client)
+
+    async def _send_to_client(self, client, message):
+        try:
+            await asyncio.wait_for(client.send(message), timeout=self.send_timeout)
+        except (asyncio.TimeoutError, Exception):
+            return False
+        return True
 
 
 class PriceAggregator:
@@ -320,7 +338,10 @@ def main():
     parser.add_argument(
         "--ui-stream",
         action="store_true",
-        help="Enable a local WebSocket feed for GUI consumers.",
+        help=(
+            "Enable a local WebSocket feed for GUI consumers. The GUI should run in a "
+            "separate process and remains read-only."
+        ),
     )
     parser.add_argument(
         "--ui-stream-host",
