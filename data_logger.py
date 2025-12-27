@@ -14,6 +14,7 @@ import datetime
 import json
 import os
 import signal
+import sys
 
 import pytz
 import requests
@@ -106,6 +107,37 @@ def _ensure_utc(value):
     if value.tzinfo is None:
         return pytz.utc.localize(value)
     return value.astimezone(pytz.utc)
+
+
+def _read_logger_pid():
+    if not os.path.exists(PID_FILE):
+        return None
+    try:
+        with open(PID_FILE, "r", encoding="utf-8") as handle:
+            raw = handle.read().strip()
+        return int(raw)
+    except (OSError, ValueError):
+        return None
+
+
+def _is_pid_running(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _stop_logger_pid(pid):
+    if not pid:
+        return False, "No running logger PID found."
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as exc:
+        return False, f"Failed to stop logger PID {pid}: {exc}"
+    return True, f"Stop signal sent to logger PID {pid}."
 
 
 def _current_market_window():
@@ -696,6 +728,11 @@ async def _run_with_signals(broadcaster):
 def main():
     parser = argparse.ArgumentParser(description="Polymarket price logger")
     parser.add_argument(
+        "--stop",
+        action="store_true",
+        help="Stop a running logger instance using the PID file.",
+    )
+    parser.add_argument(
         "--ui-stream",
         action="store_true",
         help=(
@@ -724,6 +761,18 @@ def main():
         ),
     )
     args = parser.parse_args()
+
+    if args.stop:
+        pid = _read_logger_pid()
+        if pid and not _is_pid_running(pid):
+            try:
+                os.remove(PID_FILE)
+            except OSError:
+                pass
+            pid = None
+        ok, message = _stop_logger_pid(pid)
+        print(message)
+        sys.exit(0 if ok else 1)
 
     print("Starting Data Logger...")
     broadcaster = None
