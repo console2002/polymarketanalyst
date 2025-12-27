@@ -4,15 +4,13 @@ A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down pr
 
 ## Quickstart (Windows)
 
-### 1) Install dependencies
-
-Run the installer from the project root:
+### 1) Run the installer
 
 ```bat
 install.bat
 ```
 
-### 2) Activate the virtual environment
+### 2) Activate the virtual environment and use only its Python
 
 ```bat
 .\.venv\Scripts\activate
@@ -24,13 +22,15 @@ install.bat
 python data_logger.py --ui-stream
 ```
 
-### 4) Start the GUI (in a new terminal)
-
-**Do not run `python logger_gui.py`.** Streamlit must be launched with `streamlit run`:
+### 4) Start the GUI (in a new terminal, after activating the venv)
 
 ```bat
-streamlit run logger_gui.py
+python -m streamlit run logger_gui.py
 ```
+
+### 5) Do not run the GUI directly
+
+**Do not run `python logger_gui.py` directly.**
 
 If you see a Windows “file in use” error, close any previous Streamlit processes (Task Manager or `taskkill /f /im streamlit.exe`) and try again.
 
