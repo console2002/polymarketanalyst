@@ -194,6 +194,7 @@ def _start_logger_process(host, port):
     logger_path = os.path.join(os.path.dirname(__file__), "data_logger.py")
     command = [
         sys.executable,
+        "-u",
         logger_path,
         "--ui-stream",
         "--ui-stream-host",
@@ -201,6 +202,8 @@ def _start_logger_process(host, port):
         "--ui-stream-port",
         str(port),
     ]
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
     try:
         proc = subprocess.Popen(
             command,
@@ -209,6 +212,7 @@ def _start_logger_process(host, port):
             text=True,
             bufsize=1,
             start_new_session=True,
+            env=env,
         )
     except OSError as exc:
         return None, f"Failed to launch logger: {exc}"
@@ -293,10 +297,18 @@ if stop_clicked and logger_running:
 if st.session_state.get("logger_error"):
     st.sidebar.error(st.session_state.logger_error)
 
-with st.sidebar.expander("Launch log", expanded=False):
+with st.sidebar.expander(
+    f"Launch log (last {LAUNCH_LOG_MAX_LINES} lines)",
+    expanded=False,
+):
     launch_log = st.session_state.get("launch_log", [])
     if launch_log:
-        st.text("\n".join(launch_log))
+        st.text_area(
+            "Console output",
+            value="\n".join(launch_log),
+            height=200,
+            disabled=True,
+        )
     else:
         st.caption("No launch messages yet.")
 
