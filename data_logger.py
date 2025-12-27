@@ -14,15 +14,13 @@ import datetime
 import json
 import os
 import signal
-import sys
 
 import pytz
+import requests
 import websockets
 from websockets.exceptions import InvalidMessage
 
-from fetch_current_polymarket import resolve_current_market, resolve_market_by_start_time
-from get_current_markets import get_current_market_urls
-from preflight import PreflightError, run_preflight
+from find_new_market import generate_market_url
 from websocket_logger import PolymarketWebsocketLogger, STALE_THRESHOLD_SECONDS
 
 LOGGING_INTERVAL_SECONDS = 1
@@ -35,6 +33,8 @@ DATE_FORMAT = "%d%m%Y"
 MARKET_DURATION = datetime.timedelta(minutes=15)
 SCRIPT_DIR = os.path.dirname(__file__)
 PID_FILE = os.path.join(SCRIPT_DIR, "data_logger_ui.pid")
+GAMMA_MARKET_SLUG_URL = "https://gamma-api.polymarket.com/markets/slug"
+GAMMA_TIMEOUT = (3, 10)
 CSV_HEADERS = [
     "timestamp_et",
     "timestamp_uk",
@@ -106,6 +106,107 @@ def _ensure_utc(value):
     if value.tzinfo is None:
         return pytz.utc.localize(value)
     return value.astimezone(pytz.utc)
+
+
+def _current_market_window():
+    now = datetime.datetime.now(pytz.utc)
+    base_time = now.replace(second=0, microsecond=0)
+    remainder = base_time.minute % 15
+    start_time_utc = base_time - datetime.timedelta(minutes=remainder)
+    expiration_time_utc = start_time_utc + MARKET_DURATION
+    return start_time_utc, expiration_time_utc
+
+
+def _parse_list_field(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def _parse_clob_token_ids(value):
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed if str(item).strip()]
+        cleaned = raw.strip("[]")
+        tokens = [token.strip().strip("'\"") for token in cleaned.split(",")]
+        return [token for token in tokens if token]
+    return []
+
+
+def _fetch_gamma_market(slug):
+    response = requests.get(
+        f"{GAMMA_MARKET_SLUG_URL}/{slug}",
+        timeout=GAMMA_TIMEOUT,
+    )
+    if response.status_code == 404:
+        return None, f"gamma_slug_not_found slug={slug}"
+    if response.status_code != 200:
+        return None, f"gamma_status {response.status_code} slug={slug}"
+    return response.json(), None
+
+
+def _resolve_market_by_start_time(start_time_utc):
+    if start_time_utc.tzinfo is None:
+        start_time_utc = pytz.utc.localize(start_time_utc)
+    polymarket_url = generate_market_url(start_time_utc)
+    slug = polymarket_url.split("/")[-1]
+    gamma_market, gamma_err = _fetch_gamma_market(slug)
+    if gamma_err:
+        return None, gamma_err
+    clob_token_ids = _parse_clob_token_ids(gamma_market.get("clobTokenIds"))
+    if len(clob_token_ids) < 2:
+        return (
+            None,
+            f"gamma_slug_invalid_clob_token_ids slug={slug} count={len(clob_token_ids)}",
+        )
+    outcomes = _parse_list_field(gamma_market.get("outcomes", []))
+    expiration_time_utc = start_time_utc + MARKET_DURATION
+    return {
+        "slug": slug,
+        "polymarket_url": polymarket_url,
+        "clob_token_ids": clob_token_ids,
+        "outcomes": outcomes,
+        "target_time_utc": start_time_utc,
+        "expiration_time_utc": expiration_time_utc,
+    }, None
+
+
+def _resolve_current_market():
+    start_time_utc, _ = _current_market_window()
+    candidate_times = [start_time_utc + MARKET_DURATION * offset for offset in range(3)]
+    last_error = None
+
+    for candidate_time in candidate_times:
+        market_info, err = _resolve_market_by_start_time(candidate_time)
+        if err:
+            last_error = err
+            if "gamma_slug_not_found" in err:
+                continue
+            return None, f"Gamma Error: {err}"
+        return market_info, None
+
+    return None, (
+        "Gamma Error: no valid slug found after checking 3 windows "
+        f"last_error={last_error}"
+    )
 
 
 class LoggerStreamBroadcaster:
@@ -506,9 +607,9 @@ async def run_logger(broadcaster=None, stop_event=None):
     try:
         while not stop_event.is_set():
             if next_start_time:
-                market_info, err = resolve_market_by_start_time(next_start_time)
+                market_info, err = _resolve_market_by_start_time(next_start_time)
             else:
-                market_info, err = resolve_current_market()
+                market_info, err = _resolve_current_market()
             if err:
                 print(f"Error: {err}")
                 await asyncio.sleep(STATUS_CHECK_INTERVAL_SECONDS)
@@ -592,21 +693,6 @@ async def _run_with_signals(broadcaster):
     await run_logger(broadcaster, stop_event=stop_event)
 
 
-def _current_market_slug():
-    market_info = get_current_market_urls()
-    polymarket_url = market_info.get("polymarket")
-    if not polymarket_url:
-        return None
-    return polymarket_url.split("/")[-1]
-
-
-def _run_startup_preflight():
-    slug = _current_market_slug()
-    if not slug:
-        raise PreflightError("preflight.error unable_to_resolve_slug")
-    run_preflight(slug)
-
-
 def main():
     parser = argparse.ArgumentParser(description="Polymarket price logger")
     parser.add_argument(
@@ -637,19 +723,7 @@ def main():
             "(starting at --ui-stream-port)."
         ),
     )
-    parser.add_argument(
-        "--preflight",
-        action="store_true",
-        help="Run preflight diagnostics and exit without starting websockets.",
-    )
     args = parser.parse_args()
-    try:
-        _run_startup_preflight()
-    except PreflightError as exc:
-        print(str(exc))
-        sys.exit(1)
-    if args.preflight:
-        sys.exit(0)
 
     print("Starting Data Logger...")
     broadcaster = None
