@@ -14,54 +14,25 @@ install.bat
 
 ### 2) Activate the virtual environment
 
-Either activate it:
-
 ```bat
 .\.venv\Scripts\activate
-```
-
-Or run Python directly from the venv in every command:
-
-```bat
-.\.venv\Scripts\python.exe --version
 ```
 
 ### 3) Start the logger
 
 ```bat
-.\.venv\Scripts\python.exe data_logger.py --ui-stream
+python data_logger.py --ui-stream
 ```
 
 ### 4) Start the GUI (in a new terminal)
 
-IMPORTANT: Streamlit must be launched with `streamlit run`, not `python logger_gui.py`.
-If Streamlit reports file in use, close any previous Streamlit processes (Task Manager or `taskkill /f /im streamlit.exe`).
+**Do not run `python logger_gui.py`.** Streamlit must be launched with `streamlit run`:
 
 ```bat
-.\.venv\Scripts\python.exe -m streamlit run logger_gui.py
+streamlit run logger_gui.py
 ```
 
-Running `python logger_gui.py` directly will show a warning and won’t launch the Streamlit UI. Always use `streamlit run`.
-
-### Logger only (no GUI)
-
-```bat
-.\.venv\Scripts\python.exe data_logger.py --ui-stream
-```
-
-### GUI + Logger (recommended)
-
-Terminal 1:
-
-```bat
-.\.venv\Scripts\python.exe data_logger.py --ui-stream
-```
-
-Terminal 2:
-
-```bat
-.\.venv\Scripts\python.exe -m streamlit run logger_gui.py
-```
+If you see a Windows “file in use” error, close any previous Streamlit processes (Task Manager or `taskkill /f /im streamlit.exe`) and try again.
 
 ## Features
 Recent updates have brought significant improvements to both the backtesting capabilities and the data logging service, enhancing overall analysis and strategy development.
