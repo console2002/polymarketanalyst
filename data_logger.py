@@ -1,19 +1,20 @@
-import time
-import datetime
+import asyncio
 import csv
-import os
+import datetime
 import math
-import pytz
-from fetch_current_polymarket import fetch_polymarket_data_struct
+import os
 
-LOGGING_INTERVAL_SECONDS = 5
+import pytz
+
+from fetch_current_polymarket import fetch_polymarket_data_struct
+from websocket_logger import PolymarketWebsocketLogger
+
+LOGGING_INTERVAL_SECONDS = 1
 TIMEZONE_ET = pytz.timezone("US/Eastern")
 TIMEZONE_UK = pytz.timezone("Europe/London")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
 SCRIPT_DIR = os.path.dirname(__file__)
-_LAST_VALID_PRICES = {}
-_LAST_VALID_VOLUMES = {}
 
 
 def _format_timestamp(value, timezone):
@@ -35,18 +36,20 @@ def _get_data_file(timestamp_dt):
 
 def _ensure_csv(file_path):
     if not os.path.exists(file_path):
-        with open(file_path, mode='w', newline='') as file:
+        with open(file_path, mode="w", newline="") as file:
             writer = csv.writer(file)
-            writer.writerow([
-                "Timestamp",
-                "Timestamp_UK",
-                "TargetTime",
-                "Expiration",
-                "UpPrice",
-                "DownPrice",
-                "UpVol",
-                "DownVol",
-            ])
+            writer.writerow(
+                [
+                    "Timestamp",
+                    "Timestamp_UK",
+                    "TargetTime",
+                    "Expiration",
+                    "UpPrice",
+                    "DownPrice",
+                    "UpVol",
+                    "DownVol",
+                ]
+            )
         print(f"Created {file_path}")
 
 
@@ -60,128 +63,116 @@ def _align_timestamp_to_interval(timestamp_dt, interval_seconds):
     return datetime.datetime.fromtimestamp(aligned_seconds, tz=datetime.timezone.utc)
 
 
-def _next_interval_time(timestamp_dt, interval_seconds):
-    if not timestamp_dt:
-        timestamp_dt = datetime.datetime.now(pytz.utc)
-    if timestamp_dt.tzinfo is None:
-        timestamp_dt = pytz.utc.localize(timestamp_dt)
-    epoch_seconds = timestamp_dt.timestamp()
-    next_seconds = math.floor(epoch_seconds / interval_seconds) * interval_seconds + interval_seconds
-    return datetime.datetime.fromtimestamp(next_seconds, tz=datetime.timezone.utc)
+class PriceAggregator:
+    def __init__(self, market_info):
+        self.market_info = market_info
+        self.latest = {}
+        self.last_logged = {}
+        self.last_log_time = None
+        self.outcome_order = market_info.get("outcomes") or []
+
+    async def handle_update(self, update):
+        outcome = update["outcome"]
+        self.latest[outcome] = update
+        if not self._has_both_outcomes():
+            return
+
+        now = update["timestamp"]
+        aligned_time = _align_timestamp_to_interval(now, LOGGING_INTERVAL_SECONDS)
+        prices_changed = self._prices_changed()
+        interval_elapsed = (
+            self.last_log_time is None
+            or (aligned_time - self.last_log_time).total_seconds() >= LOGGING_INTERVAL_SECONDS
+        )
+
+        if prices_changed or interval_elapsed:
+            self._log_row(aligned_time)
+
+    def _has_both_outcomes(self):
+        return len(self.latest) >= 2
+
+    def _prices_changed(self):
+        for outcome, update in self.latest.items():
+            last = self.last_logged.get(outcome)
+            if not last:
+                return True
+            if (
+                update["best_ask"] != last["best_ask"]
+                or update["best_ask_size"] != last["best_ask_size"]
+            ):
+                return True
+        return False
+
+    def _log_row(self, timestamp_dt):
+        if len(self.latest) < 2:
+            return
+        up_key, down_key = self._ordered_outcomes()
+        if not up_key or not down_key:
+            return
+        up_update = self.latest[up_key]
+        down_update = self.latest[down_key]
+
+        timestamp_et = _format_timestamp(timestamp_dt, TIMEZONE_ET)
+        timestamp_uk = _format_timestamp(timestamp_dt, TIMEZONE_UK)
+        target_time = self.market_info.get("target_time_utc")
+        expiration = self.market_info.get("expiration_time_utc")
+        target_time_str = _format_timestamp(target_time, TIMEZONE_UK)
+        expiration_str = _format_timestamp(expiration, TIMEZONE_UK)
+
+        row = [
+            timestamp_et,
+            timestamp_uk,
+            target_time_str,
+            expiration_str,
+            up_update["best_ask"],
+            down_update["best_ask"],
+            up_update["best_ask_size"],
+            down_update["best_ask_size"],
+        ]
+
+        data_file = _get_data_file(timestamp_dt)
+        _ensure_csv(data_file)
+        with open(data_file, mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(row)
+
+        self.last_logged = {
+            up_key: up_update,
+            down_key: down_update,
+        }
+        self.last_log_time = timestamp_dt
+        print(
+            f"[{timestamp_et}] Logged: Up={up_update['best_ask']}, "
+            f"Down={down_update['best_ask']}"
+        )
+
+    def _ordered_outcomes(self):
+        if len(self.outcome_order) >= 2:
+            return self.outcome_order[0], self.outcome_order[1]
+        outcomes = list(self.latest.keys())
+        if len(outcomes) >= 2:
+            return outcomes[0], outcomes[1]
+        return None, None
 
 
-def _get_valid_prices(prices):
-    if not prices:
-        return None
-    up_price = prices.get("Up")
-    down_price = prices.get("Down")
-    if up_price and down_price and up_price > 0 and down_price > 0:
-        _LAST_VALID_PRICES.update({"Up": up_price, "Down": down_price})
-        return {"Up": up_price, "Down": down_price}
-    if _LAST_VALID_PRICES:
-        return _LAST_VALID_PRICES.copy()
-    return None
-
-
-def _get_valid_volumes(volumes):
-    if not volumes:
-        return _LAST_VALID_VOLUMES.copy() if _LAST_VALID_VOLUMES else None
-    up_volume = volumes.get("Up", 0.0)
-    down_volume = volumes.get("Down", 0.0)
-    _LAST_VALID_VOLUMES.update({"Up": up_volume, "Down": down_volume})
-    return {"Up": up_volume, "Down": down_volume}
-
-
-def log_data(fetched_data=None, timestamp_dt=None):
-    if fetched_data is None:
-        fetched_data, err = fetch_polymarket_data_struct()
-    else:
-        err = None
-
-    if timestamp_dt is None:
-        timestamp_dt = fetched_data.get("polymarket_time_utc") if fetched_data else None
-    if not timestamp_dt:
-        timestamp_dt = datetime.datetime.now(pytz.utc)
-    timestamp_et = _format_timestamp(timestamp_dt, TIMEZONE_ET)
-    timestamp_uk = _format_timestamp(timestamp_dt, TIMEZONE_UK)
-    
-    # Check if data is complete
-    data = None
-    if fetched_data and fetched_data.get('prices') is not None:
-        data = fetched_data
-    else:
-        error_msg = err if err else "Missing fields"
-        print(f"[{timestamp_et}] Error: Could not retrieve full data ({error_msg})")
+async def run_logger():
+    market_info, err = fetch_polymarket_data_struct()
+    if err:
+        print(f"Error: {err}")
         return
 
-    # Extract values
-    target_time = data.get('target_time_utc', '')
-    expiration = data.get('expiration_time_utc', '')
+    aggregator = PriceAggregator(market_info)
+    ws_logger = PolymarketWebsocketLogger(market_info, aggregator.handle_update)
+    await ws_logger.run()
 
-    target_time_str = _format_timestamp(target_time, TIMEZONE_UK)
-    expiration_str = _format_timestamp(expiration, TIMEZONE_UK)
-    prices = _get_valid_prices(data.get('prices', {}))
-    volumes = _get_valid_volumes(data.get('volumes', {}))
-    if not prices:
-        print(f"[{timestamp_et}] Error: Invalid or zero prices received; skipping log.")
-        return
-
-    up_price = prices.get('Up', 0.0)
-    down_price = prices.get('Down', 0.0)
-    up_volume = volumes.get('Up', 0.0) if volumes else 0.0
-    down_volume = volumes.get('Down', 0.0) if volumes else 0.0
-    
-    row = [
-        timestamp_et,
-        timestamp_uk,
-        target_time_str,
-        expiration_str,
-        up_price,
-        down_price,
-        up_volume,
-        down_volume,
-    ]
-    
-    data_file = _get_data_file(timestamp_dt)
-    _ensure_csv(data_file)
-
-    with open(data_file, mode='a', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(row)
-        
-    print(f"[{timestamp_et}] Logged: Up={up_price}, Down={down_price}, UpVol={up_volume}, DownVol={down_volume}")
 
 def main():
     print("Starting Data Logger...")
-    
-    while True:
-        try:
-            fetched_data, err = fetch_polymarket_data_struct()
-            now_utc = datetime.datetime.now(pytz.utc)
-            target_time = fetched_data.get("target_time_utc") if fetched_data else None
+    try:
+        asyncio.run(run_logger())
+    except KeyboardInterrupt:
+        print("\nStopping logger...")
 
-            if err:
-                print(f"[{_format_timestamp(now_utc, TIMEZONE_ET)}] Error: {err}")
-                next_log_time = _next_interval_time(now_utc, LOGGING_INTERVAL_SECONDS)
-                time.sleep(max(0, (next_log_time - now_utc).total_seconds()))
-                continue
-
-            if target_time and now_utc < target_time:
-                sleep_seconds = (target_time - now_utc).total_seconds()
-                time.sleep(max(0, sleep_seconds))
-                continue
-
-            log_timestamp = _align_timestamp_to_interval(now_utc, LOGGING_INTERVAL_SECONDS)
-            log_data(fetched_data=fetched_data, timestamp_dt=log_timestamp)
-            next_log_time = _next_interval_time(now_utc, LOGGING_INTERVAL_SECONDS)
-            sleep_seconds = (next_log_time - now_utc).total_seconds()
-            time.sleep(max(0, sleep_seconds))
-        except KeyboardInterrupt:
-            print("\nStopping logger...")
-            break
-        except Exception as e:
-            print(f"Error: {e}")
-            time.sleep(LOGGING_INTERVAL_SECONDS)   
 
 if __name__ == "__main__":
     main()
