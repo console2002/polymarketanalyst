@@ -81,10 +81,11 @@ echo ==============================================================
 echo Setup complete.
 echo ==============================================================
 echo Next steps:
-echo   1) Run the data logger:
-echo        .\.venv\Scripts\python.exe data_logger.py
-echo   2) In a new terminal, start the dashboard:
-echo        .\.venv\Scripts\python.exe -m streamlit run dashboard.py
+echo   1) Run the data logger (with the GUI stream enabled):
+echo        .\.venv\Scripts\python.exe data_logger.py --ui-stream
+echo   2) In a new terminal, start the GUI:
+echo        .\.venv\Scripts\streamlit.exe run logger_gui.py
+echo   3) Re-run install.bat any time you need to refresh dependencies.
 echo.
 
 pause
