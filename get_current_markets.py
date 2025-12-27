@@ -19,9 +19,9 @@ def get_current_market_urls():
     
     # The "Start Time" of this 15-min candle would be target_time - 15 minutes
     start_time_utc = target_time - datetime.timedelta(minutes=15)
-    
-    # Use START TIME for URL generation, as Polymarket uses the start time in the slug
-    polymarket_url = generate_polymarket_url(start_time_utc)
+
+    # 15m Polymarket slugs use the expiration timestamp, not the start time.
+    polymarket_url = generate_polymarket_url(target_time)
     
     return {
         "polymarket": polymarket_url,
