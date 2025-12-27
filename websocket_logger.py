@@ -141,9 +141,11 @@ class PolymarketWebsocketLogger:
     def __init__(self, market_info, on_price_update):
         self.market_info = market_info
         self.on_price_update = on_price_update
-        self._assets_ids = [
+        self._asset_ids = [
             str(token_id) for token_id in market_info.get("clob_token_ids", [])
         ]
+        self._event_slug = market_info.get("event_slug") or market_info.get("slug")
+        self._market_slug = market_info.get("market_slug")
         self._market_ids = [
             str(value)
             for value in (
@@ -238,17 +240,11 @@ class PolymarketWebsocketLogger:
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
 
     async def _subscribe_clob(self, ws):
-        payload = {"type": "market", "assets_ids": self._assets_ids}
+        payload = self._clob_subscribe_payload()
         await self._send_ws_payload(ws, "CLOB subscribe", payload)
 
     async def _subscribe_rtds(self, ws):
-        payload = {
-            "type": "subscribe",
-            "channel": "trades",
-            "asset_ids": self._assets_ids,
-        }
-        if self._market_ids:
-            payload["market_ids"] = self._market_ids
+        payload = self._rtds_subscribe_payload()
         await self._send_ws_payload(ws, "RTDS subscribe", payload)
 
     async def _clob_heartbeat(self, ws):
@@ -359,12 +355,17 @@ class PolymarketWebsocketLogger:
 
         self._last_rtds_message_at = datetime.datetime.now(pytz.utc)
         self._maybe_log_ack("RTDS", payload)
-        token_id = _find_token_id(payload)
-        trades = payload.get("trades") or payload.get("data") or payload.get("events")
+        payload_body = payload.get("payload") if isinstance(payload, dict) else None
+        token_id = _find_token_id(payload_body or payload)
+        trades = None
+        if payload_body is not None:
+            trades = payload_body.get("trades") if isinstance(payload_body, dict) else payload_body
+        if trades is None:
+            trades = payload.get("trades") or payload.get("data") or payload.get("events")
         if isinstance(trades, dict):
             trades = [trades]
         if not trades:
-            trades = [payload]
+            trades = [payload_body] if payload_body is not None else [payload]
 
         for trade in trades:
             trade_token = _find_token_id(trade) or token_id
@@ -446,8 +447,13 @@ class PolymarketWebsocketLogger:
     def _maybe_log_ack(self, source, payload):
         event_type = payload.get("event_type") or payload.get("type")
         status = payload.get("status")
+        action = payload.get("action")
         ack_types = {"subscribed", "subscribe", "subscription", "ack", "connected", "info"}
-        if event_type in ack_types or status in ("ok", "success"):
+        if (
+            event_type in ack_types
+            or status in ("ok", "success")
+            or action in ("subscribe", "subscribed", "subscription")
+        ):
             print(f"{source} ack: {json.dumps(payload)}")
 
     async def _clob_watchdog(self, ws):
@@ -462,8 +468,11 @@ class PolymarketWebsocketLogger:
             last_resub = self._last_clob_resubscribe_at
             if last_resub and (now - last_resub).total_seconds() < STALE_THRESHOLD_SECONDS:
                 continue
+            print(
+                f"CLOB warning: no updates for {stale_for:.1f}s, resubscribing to refresh snapshot"
+            )
             self._last_clob_resubscribe_at = now
-            payload = {"assets_ids": self._assets_ids, "operation": "subscribe"}
+            payload = self._clob_resubscribe_payload()
             await self._send_ws_payload(ws, "CLOB resubscribe (refresh snapshot)", payload)
 
     async def _rtds_watchdog(self, ws):
@@ -478,17 +487,31 @@ class PolymarketWebsocketLogger:
             last_resub = self._last_rtds_resubscribe_at
             if last_resub and (now - last_resub).total_seconds() < STALE_THRESHOLD_SECONDS:
                 continue
+            print(
+                f"RTDS warning: no updates for {stale_for:.1f}s, resubscribing to refresh snapshot"
+            )
             self._last_rtds_resubscribe_at = now
-            payload = {
-                "type": "subscribe",
-                "channel": "trades",
-                "asset_ids": self._assets_ids,
-            }
-            if self._market_ids:
-                payload["market_ids"] = self._market_ids
+            payload = self._rtds_subscribe_payload()
             await self._send_ws_payload(ws, "RTDS resubscribe (refresh)", payload)
 
     @staticmethod
     def _next_backoff(current):
         jitter = random.uniform(0.0, 0.5)
         return min(current + jitter, MAX_BACKOFF_SECONDS)
+
+    def _clob_subscribe_payload(self):
+        return {"type": "market", "assets_ids": self._asset_ids}
+
+    def _clob_resubscribe_payload(self):
+        return {"assets_ids": self._asset_ids, "operation": "subscribe"}
+
+    def _rtds_subscribe_payload(self):
+        subscription = {"topic": "activity", "type": "trades"}
+        filter_payload = None
+        if self._market_slug:
+            filter_payload = {"market_slug": self._market_slug}
+        elif self._event_slug:
+            filter_payload = {"event_slug": self._event_slug}
+        if filter_payload:
+            subscription["filters"] = json.dumps(filter_payload)
+        return {"action": "subscribe", "subscriptions": [subscription]}
