@@ -5,7 +5,7 @@ import os
 
 import pytz
 
-from fetch_current_polymarket import fetch_polymarket_data_struct
+from fetch_current_polymarket import resolve_current_market
 from websocket_logger import PolymarketWebsocketLogger, STALE_THRESHOLD_SECONDS
 
 LOGGING_INTERVAL_SECONDS = 1
@@ -229,7 +229,7 @@ class PriceAggregator:
 
 
 async def run_logger():
-    market_info, err = fetch_polymarket_data_struct()
+    market_info, err = resolve_current_market()
     if err:
         print(f"Error: {err}")
         return
