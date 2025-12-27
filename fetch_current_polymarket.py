@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 import re
 import time
 from email.utils import parsedate_to_datetime
@@ -11,14 +12,17 @@ from urllib3.util.retry import Retry
 
 from get_current_markets import get_current_market_urls
 from find_new_market import generate_market_url
+from preflight import parse_clob_token_ids
 
 # Configuration
 POLYMARKET_API_URL = "https://gamma-api.polymarket.com/events"
+GAMMA_MARKET_SLUG_URL = "https://gamma-api.polymarket.com/markets/slug"
 POLYMARKET_TIMEOUT = (3, 10)
 POLYMARKET_RATE_LIMIT_SECONDS = 1
 _POLYMARKET_SESSION = None
 _LAST_POLYMARKET_CALL_AT = None
 _FIFTEEN_MINUTES = datetime.timedelta(minutes=15)
+_LOGGER = logging.getLogger(__name__)
 
 
 def _get_polymarket_session():
@@ -75,6 +79,28 @@ def _get_polymarket_event(slug):
             return None, "Transient network/TLS issue while fetching Polymarket data", None
         except Exception as e:
             return None, str(e), None
+
+
+def _get_gamma_market_by_slug(slug):
+    session = _get_polymarket_session()
+    _rate_limit_polymarket_calls()
+    try:
+        response = session.get(
+            f"{GAMMA_MARKET_SLUG_URL}/{slug}",
+            timeout=POLYMARKET_TIMEOUT,
+        )
+    except Exception as e:
+        return None, f"Gamma request failed: {e}", None
+
+    if response.status_code == 404:
+        return None, "gamma_slug_not_found", response.status_code
+    if response.status_code != 200:
+        return None, f"Gamma status {response.status_code}", response.status_code
+
+    try:
+        return response.json(), None, response.status_code
+    except Exception as e:
+        return None, f"Gamma invalid JSON: {e}", response.status_code
 
 
 def _parse_list_field(value):
@@ -161,6 +187,52 @@ def get_polymarket_metadata(slug):
         return None, str(e)
 
 
+def resolve_market_by_slug(slug):
+    gamma_market, gamma_err, status_code = _get_gamma_market_by_slug(slug)
+    if gamma_err:
+        if status_code == 404:
+            return None, f"gamma_slug_not_found slug={slug}"
+        fallback_data, fallback_err = get_polymarket_metadata(slug)
+        if fallback_err:
+            return None, (
+                f"Gamma Error: {gamma_err}; Fallback Error: {fallback_err}"
+            )
+        _LOGGER.warning(
+            "Gamma slug lookup failed; falling back to event metadata. "
+            "slug=%s error=%s",
+            slug,
+            gamma_err,
+        )
+        return {
+            "slug": slug,
+            "clob_token_ids": fallback_data.get("clob_token_ids", []),
+            "outcomes": fallback_data.get("outcomes", []),
+            "start_time": fallback_data.get("start_time"),
+            "end_time": fallback_data.get("end_time"),
+            "polymarket_time_utc": fallback_data.get("polymarket_time_utc"),
+        }, None
+
+    clob_token_ids = parse_clob_token_ids(gamma_market.get("clobTokenIds"))
+    if len(clob_token_ids) != 2:
+        return (
+            None,
+            "gamma_slug_invalid_clob_token_ids "
+            f"slug={slug} count={len(clob_token_ids)}",
+        )
+
+    outcomes = _parse_list_field(gamma_market.get("outcomes", []))
+    start_time, end_time = _extract_market_times(gamma_market)
+
+    return {
+        "slug": slug,
+        "clob_token_ids": clob_token_ids,
+        "outcomes": outcomes,
+        "start_time": start_time,
+        "end_time": end_time,
+        "polymarket_time_utc": None,
+    }, None
+
+
 def fetch_polymarket_data_struct():
     """
     Fetches current Polymarket market metadata (token IDs, outcomes, times).
@@ -175,7 +247,7 @@ def resolve_market_by_start_time(start_time_utc):
         start_time_utc = start_time_utc.replace(tzinfo=datetime.timezone.utc)
     polymarket_url = generate_market_url(start_time_utc)
     slug = polymarket_url.split("/")[-1]
-    poly_data, poly_err = get_polymarket_metadata(slug)
+    poly_data, poly_err = resolve_market_by_slug(slug)
     if poly_err:
         return None, f"Polymarket Error: {poly_err}"
     target_time_utc, expiration_time_utc = _market_window_from_slug(slug)
@@ -206,30 +278,45 @@ def resolve_current_market():
     """
     try:
         market_info = get_current_market_urls()
-        polymarket_url = market_info["polymarket"]
         target_time_utc = market_info["target_time_utc"]
         expiration_time_utc = market_info["expiration_time_utc"]
 
-        slug = polymarket_url.split("/")[-1]
+        candidate_times = [target_time_utc + _FIFTEEN_MINUTES * offset for offset in range(3)]
+        last_error = None
 
-        poly_data, poly_err = get_polymarket_metadata(slug)
+        for candidate_time in candidate_times:
+            polymarket_url = generate_market_url(candidate_time)
+            slug = polymarket_url.split("/")[-1]
 
-        if poly_err:
-            return None, f"Polymarket Error: {poly_err}"
+            poly_data, poly_err = resolve_market_by_slug(slug)
+            if poly_err:
+                last_error = poly_err
+                if "gamma_slug_not_found" in poly_err:
+                    continue
+                return None, f"Polymarket Error: {poly_err}"
 
-        slug_target_time, slug_expiration_time = _market_window_from_slug(slug)
-        target_time_utc = slug_target_time or poly_data.get("start_time") or target_time_utc
-        expiration_time_utc = slug_expiration_time or poly_data.get("end_time") or expiration_time_utc
+            slug_target_time, slug_expiration_time = _market_window_from_slug(slug)
+            target_time_utc = slug_target_time or poly_data.get("start_time") or candidate_time
+            expiration_time_utc = (
+                slug_expiration_time
+                or poly_data.get("end_time")
+                or (target_time_utc + _FIFTEEN_MINUTES)
+            )
 
-        result = {
-            "slug": slug,
-            "polymarket_url": polymarket_url,
-            "clob_token_ids": poly_data.get("clob_token_ids", []),
-            "outcomes": poly_data.get("outcomes", []),
-            "target_time_utc": target_time_utc,
-            "expiration_time_utc": expiration_time_utc,
-            "polymarket_time_utc": poly_data.get("polymarket_time_utc"),
-        }
-        return result, None
+            result = {
+                "slug": slug,
+                "polymarket_url": polymarket_url,
+                "clob_token_ids": poly_data.get("clob_token_ids", []),
+                "outcomes": poly_data.get("outcomes", []),
+                "target_time_utc": target_time_utc,
+                "expiration_time_utc": expiration_time_utc,
+                "polymarket_time_utc": poly_data.get("polymarket_time_utc"),
+            }
+            return result, None
+
+        return None, (
+            "Polymarket Error: no valid slug found after checking 3 windows "
+            f"last_error={last_error}"
+        )
     except Exception as e:
         return None, str(e)
