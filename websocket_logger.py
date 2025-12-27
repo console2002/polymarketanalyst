@@ -1,18 +1,26 @@
 import asyncio
 import datetime
 import json
+import logging
 import random
 from dataclasses import dataclass, field
 
 import pytz
 import websockets
 
-CLOB_WS_URL = "wss://ws-subscriptions-clob.polymarket.com"
+CLOB_WS_BASE_URL = "wss://ws-subscriptions-clob.polymarket.com"
+CLOB_WS_CHANNEL = "market"
 RTDS_WS_URL = "wss://ws-live-data.polymarket.com"
 CLOB_HEARTBEAT_SECONDS = 10
 RTDS_HEARTBEAT_SECONDS = 5
 MAX_BACKOFF_SECONDS = 60
 STALE_THRESHOLD_SECONDS = 15
+
+logger = logging.getLogger(__name__)
+
+
+def build_clob_ws_url(channel=CLOB_WS_CHANNEL):
+    return f"{CLOB_WS_BASE_URL}/ws/{channel}"
 
 
 @dataclass
@@ -138,9 +146,10 @@ def _normalize_trade_side(value):
 
 
 class PolymarketWebsocketLogger:
-    def __init__(self, market_info, on_price_update):
+    def __init__(self, market_info, on_price_update, clob_ping_interval=CLOB_HEARTBEAT_SECONDS):
         self.market_info = market_info
         self.on_price_update = on_price_update
+        self._clob_ping_interval = clob_ping_interval
         self._asset_ids = [
             str(token_id) for token_id in market_info.get("clob_token_ids", [])
         ]
@@ -177,6 +186,8 @@ class PolymarketWebsocketLogger:
         self.last_stream_seq_id = {str(token_id): None for token_id in market_info["clob_token_ids"]}
         self.last_update = {str(token_id): None for token_id in market_info["clob_token_ids"]}
         self.last_heartbeat = None
+        self.clob_frames_received = 0
+        self.rtds_frames_received = 0
         self.reconnect_count = 0
         self._shutdown = asyncio.Event()
         self._last_clob_message_at = None
@@ -198,7 +209,7 @@ class PolymarketWebsocketLogger:
         while not self._shutdown.is_set():
             try:
                 async with websockets.connect(
-                    CLOB_WS_URL,
+                    build_clob_ws_url(),
                     ping_interval=None,
                     max_queue=None,
                 ) as ws:
@@ -210,6 +221,17 @@ class PolymarketWebsocketLogger:
                         await self._handle_clob_message(message)
                     heartbeat.cancel()
                     watchdog.cancel()
+            except websockets.exceptions.InvalidStatusCode as exc:
+                if exc.status_code == 403:
+                    print(
+                        "CLOB error: websocket handshake failed with HTTP 403. "
+                        "Check preflight.geoblock output for geoblock results."
+                    )
+                    self._shutdown.set()
+                    return
+                self.reconnect_count += 1
+                await asyncio.sleep(self._next_backoff(backoff))
+                backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
             except Exception:
                 self.reconnect_count += 1
                 await asyncio.sleep(self._next_backoff(backoff))
@@ -249,7 +271,7 @@ class PolymarketWebsocketLogger:
 
     async def _clob_heartbeat(self, ws):
         while not self._shutdown.is_set():
-            await asyncio.sleep(CLOB_HEARTBEAT_SECONDS)
+            await asyncio.sleep(self._clob_ping_interval)
             try:
                 await ws.send("PING")
             except Exception:
@@ -264,22 +286,25 @@ class PolymarketWebsocketLogger:
                 break
 
     async def _handle_clob_message(self, message):
+        self.clob_frames_received += 1
+        self._last_clob_message_at = datetime.datetime.now(pytz.utc)
         if message == "PONG":
             self._mark_heartbeat()
             return
         try:
             payload = json.loads(message)
         except json.JSONDecodeError:
+            logger.debug("CLOB message parse failure: %s", message)
             return
 
         self._mark_heartbeat()
-        self._last_clob_message_at = datetime.datetime.now(pytz.utc)
         self._maybe_log_ack("CLOB", payload)
         self._maybe_log_error("CLOB", payload)
         token_id = _find_token_id(payload)
         event_type = payload.get("event_type") or payload.get("type")
         bids = payload.get("bids")
         asks = payload.get("asks")
+        books = payload.get("books") or payload.get("order_books")
         price_changes = payload.get("price_changes") or payload.get("priceChanges")
         server_time = _find_server_time(payload)
         stream_seq_id = _find_stream_seq_id(payload)
@@ -298,17 +323,34 @@ class PolymarketWebsocketLogger:
         else:
             book = None
 
-        if event_type in ("book", "snapshot", "book_snapshot") and (
-            bids is not None or asks is not None
-        ):
-            if not book:
+        if event_type in ("book", "snapshot", "book_snapshot"):
+            if bids is not None or asks is not None:
+                if not book:
+                    return
+                if bids is not None:
+                    book.replace_levels("bids", _parse_levels(bids))
+                if asks is not None:
+                    book.replace_levels("asks", _parse_levels(asks))
+                await self._emit_price_update(token_id)
                 return
-            if bids is not None:
-                book.replace_levels("bids", _parse_levels(bids))
-            if asks is not None:
-                book.replace_levels("asks", _parse_levels(asks))
-            await self._emit_price_update(token_id)
-            return
+            if isinstance(books, list):
+                for entry in books:
+                    entry_token = _find_token_id(entry or {})
+                    if entry_token not in self.order_books:
+                        continue
+                    if server_time:
+                        self.last_server_time[entry_token] = server_time
+                    if stream_seq_id is not None:
+                        self.last_stream_seq_id[entry_token] = stream_seq_id
+                    entry_book = self.order_books[entry_token]
+                    entry_bids = entry.get("bids")
+                    entry_asks = entry.get("asks")
+                    if entry_bids is not None:
+                        entry_book.replace_levels("bids", _parse_levels(entry_bids))
+                    if entry_asks is not None:
+                        entry_book.replace_levels("asks", _parse_levels(entry_asks))
+                    await self._emit_price_update(entry_token)
+                return
 
         if event_type in ("book_delta", "delta", "update") and (
             bids is not None or asks is not None
@@ -349,12 +391,14 @@ class PolymarketWebsocketLogger:
                 await self._emit_price_update(change_token)
 
     async def _handle_rtds_message(self, message):
+        self.rtds_frames_received += 1
+        self._last_rtds_message_at = datetime.datetime.now(pytz.utc)
         try:
             payload = json.loads(message)
         except json.JSONDecodeError:
+            logger.debug("RTDS message parse failure: %s", message)
             return
 
-        self._last_rtds_message_at = datetime.datetime.now(pytz.utc)
         self._maybe_log_ack("RTDS", payload)
         self._maybe_log_error("RTDS", payload)
         payload_body = payload.get("payload") if isinstance(payload, dict) else None
