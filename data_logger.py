@@ -1,9 +1,13 @@
+import argparse
 import asyncio
 import csv
 import datetime
+import json
 import os
+import contextlib
 
 import pytz
+import websockets
 
 from fetch_current_polymarket import resolve_current_market
 from websocket_logger import PolymarketWebsocketLogger, STALE_THRESHOLD_SECONDS
@@ -14,6 +18,32 @@ TIMEZONE_UK = pytz.timezone("Europe/London")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
 SCRIPT_DIR = os.path.dirname(__file__)
+CSV_HEADERS = [
+    "timestamp_et",
+    "timestamp_uk",
+    "target_time_uk",
+    "expiration_uk",
+    "server_time_utc",
+    "local_time_utc",
+    "stream_seq_id",
+    "token_id",
+    "outcome",
+    "best_bid",
+    "best_ask",
+    "mid",
+    "spread",
+    "spread_pct",
+    "best_bid_size",
+    "best_ask_size",
+    "last_trade_price",
+    "last_trade_size",
+    "last_trade_side",
+    "last_trade_ts",
+    "heartbeat_last_seen",
+    "reconnect_count",
+    "is_stale",
+    "stale_age_seconds",
+]
 
 
 def _format_timestamp(value, timezone):
@@ -49,39 +79,65 @@ def _ensure_csv(file_path):
             writer = csv.writer(file)
             # Required fields: timestamps, market times, IDs, best quotes/sizes, and health/staleness.
             # Optional fields: last trade details (price/size/side/timestamp).
-            writer.writerow(
-                [
-                    "timestamp_et",
-                    "timestamp_uk",
-                    "target_time_uk",
-                    "expiration_uk",
-                    "server_time_utc",
-                    "local_time_utc",
-                    "stream_seq_id",
-                    "token_id",
-                    "outcome",
-                    "best_bid",
-                    "best_ask",
-                    "mid",
-                    "spread",
-                    "spread_pct",
-                    "best_bid_size",
-                    "best_ask_size",
-                    "last_trade_price",
-                    "last_trade_size",
-                    "last_trade_side",
-                    "last_trade_ts",
-                    "heartbeat_last_seen",
-                    "reconnect_count",
-                    "is_stale",
-                    "stale_age_seconds",
-                ]
-            )
+            writer.writerow(CSV_HEADERS)
         print(f"Created {file_path}")
 
 
+class LoggerStreamBroadcaster:
+    def __init__(self, host="127.0.0.1", port=8765, max_queue=1000):
+        self.host = host
+        self.port = port
+        self.queue = asyncio.Queue(maxsize=max_queue)
+        self._clients = set()
+        self._server = None
+        self._task = None
+        self._shutdown = asyncio.Event()
+
+    async def start(self):
+        self._server = await websockets.serve(self._handle_client, self.host, self.port)
+        self._task = asyncio.create_task(self._broadcast_loop())
+        print(f"UI stream available at ws://{self.host}:{self.port}")
+
+    async def stop(self):
+        self._shutdown.set()
+        if self._task:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+        if self._server:
+            self._server.close()
+            await self._server.wait_closed()
+
+    def publish(self, payload):
+        if self.queue.full():
+            return
+        self.queue.put_nowait(payload)
+
+    async def _handle_client(self, websocket):
+        self._clients.add(websocket)
+        try:
+            await websocket.wait_closed()
+        finally:
+            self._clients.discard(websocket)
+
+    async def _broadcast_loop(self):
+        while not self._shutdown.is_set():
+            payload = await self.queue.get()
+            message = json.dumps(payload, default=str)
+            if not self._clients:
+                continue
+            to_remove = []
+            for client in self._clients:
+                try:
+                    await client.send(message)
+                except Exception:
+                    to_remove.append(client)
+            for client in to_remove:
+                self._clients.discard(client)
+
+
 class PriceAggregator:
-    def __init__(self, market_info):
+    def __init__(self, market_info, broadcaster=None):
         self.market_info = market_info
         self.latest = {}
         self.last_logged = {}
@@ -90,6 +146,7 @@ class PriceAggregator:
         self._current_file_path = None
         self._current_file_handle = None
         self._current_writer = None
+        self._broadcaster = broadcaster
 
     async def handle_update(self, update):
         outcome = update["outcome"]
@@ -174,6 +231,15 @@ class PriceAggregator:
         data_file = _get_data_file(self._event_timestamp(up_update, down_update, timestamp_dt))
         writer = self._get_writer(data_file)
         writer.writerows(rows)
+        if self._broadcaster:
+            payload_rows = [dict(zip(CSV_HEADERS, row)) for row in rows]
+            self._broadcaster.publish(
+                {
+                    "file": data_file,
+                    "timestamp": _format_timestamp_utc(timestamp_dt),
+                    "rows": payload_rows,
+                }
+            )
 
         self.last_logged = {
             up_key: up_update,
@@ -232,21 +298,51 @@ class PriceAggregator:
         return max(numeric_ages)
 
 
-async def run_logger():
+async def run_logger(broadcaster=None):
     market_info, err = resolve_current_market()
     if err:
         print(f"Error: {err}")
         return
 
-    aggregator = PriceAggregator(market_info)
+    aggregator = PriceAggregator(market_info, broadcaster=broadcaster)
     ws_logger = PolymarketWebsocketLogger(market_info, aggregator.handle_update)
-    await ws_logger.run()
+    if broadcaster:
+        await broadcaster.start()
+    try:
+        await ws_logger.run()
+    finally:
+        if broadcaster:
+            await broadcaster.stop()
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Polymarket price logger")
+    parser.add_argument(
+        "--ui-stream",
+        action="store_true",
+        help="Enable a local WebSocket feed for GUI consumers.",
+    )
+    parser.add_argument(
+        "--ui-stream-host",
+        default="127.0.0.1",
+        help="Host interface for the GUI WebSocket feed.",
+    )
+    parser.add_argument(
+        "--ui-stream-port",
+        type=int,
+        default=8765,
+        help="Port for the GUI WebSocket feed.",
+    )
+    args = parser.parse_args()
     print("Starting Data Logger...")
+    broadcaster = None
+    if args.ui_stream:
+        broadcaster = LoggerStreamBroadcaster(
+            host=args.ui_stream_host,
+            port=args.ui_stream_port,
+        )
     try:
-        asyncio.run(run_logger())
+        asyncio.run(run_logger(broadcaster))
     except KeyboardInterrupt:
         print("\nStopping logger...")
 
