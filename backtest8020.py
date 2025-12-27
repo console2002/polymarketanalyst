@@ -16,6 +16,7 @@ DATA_FILE = "market_data.csv"
 DATE_FILE_PATTERN = re.compile(r"^\d{8}\.csv$")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 TIMEZONE_ET = "US/Eastern"
+TIMEZONE_UK = "Europe/London"
 
 # Global Configuration Variables
 INITIAL_CAPITAL = 1000.0
@@ -90,6 +91,71 @@ class Backtester:
     def load_data(self, file_path):
         self.load_data_files([file_path])
 
+    def _normalize_latest_csv(self, raw_data):
+        required_columns = {"timestamp_et", "target_time_uk", "expiration_uk", "outcome"}
+        missing_columns = required_columns - set(raw_data.columns)
+        if missing_columns:
+            missing_list = ", ".join(sorted(missing_columns))
+            raise ValueError(f"Missing required columns in latest CSV format: {missing_list}")
+
+        data = raw_data.copy()
+        data["Timestamp"] = (
+            pd.to_datetime(data["timestamp_et"], format=TIME_FORMAT)
+            .dt.tz_localize(TIMEZONE_ET)
+            .dt.tz_convert("UTC")
+        )
+        data["TargetTime"] = (
+            pd.to_datetime(data["target_time_uk"], format=TIME_FORMAT)
+            .dt.tz_localize(TIMEZONE_UK)
+            .dt.tz_convert("UTC")
+        )
+        data["Expiration"] = (
+            pd.to_datetime(data["expiration_uk"], format=TIME_FORMAT)
+            .dt.tz_localize(TIMEZONE_UK)
+            .dt.tz_convert("UTC")
+        )
+
+        if "local_time_utc" in data.columns:
+            data["LocalTimeUtc"] = pd.to_datetime(data["local_time_utc"], errors="coerce", utc=True)
+        elif "server_time_utc" in data.columns:
+            data["LocalTimeUtc"] = pd.to_datetime(data["server_time_utc"], errors="coerce", utc=True)
+        else:
+            data["LocalTimeUtc"] = data["Timestamp"]
+
+        data["best_bid"] = pd.to_numeric(data.get("best_bid"), errors="coerce")
+        data["best_ask"] = pd.to_numeric(data.get("best_ask"), errors="coerce")
+        data["EffectivePrice"] = data["best_ask"].where(data["best_ask"] > 0, data["best_bid"])
+        data["EffectivePrice"] = data["EffectivePrice"].fillna(0.0)
+
+        outcome_raw = data["outcome"].astype(str).str.strip().str.lower()
+        outcome_mapping = {"up": "Up", "yes": "Up", "down": "Down", "no": "Down"}
+        data["OutcomeNormalized"] = outcome_raw.map(outcome_mapping).fillna(data["outcome"].astype(str).str.strip())
+
+        data = data.sort_values(
+            by=["Timestamp", "TargetTime", "Expiration", "OutcomeNormalized", "LocalTimeUtc"]
+        )
+        grouped = (
+            data.groupby(["Timestamp", "TargetTime", "Expiration", "OutcomeNormalized"], as_index=False)
+            .last()
+        )
+        pivoted = (
+            grouped.pivot_table(
+                index=["Timestamp", "TargetTime", "Expiration"],
+                columns="OutcomeNormalized",
+                values="EffectivePrice",
+                aggfunc="last",
+            )
+            .reset_index()
+        )
+        pivoted.rename(columns={"Up": "UpPrice", "Down": "DownPrice"}, inplace=True)
+        if "UpPrice" not in pivoted.columns:
+            pivoted["UpPrice"] = 0.0
+        if "DownPrice" not in pivoted.columns:
+            pivoted["DownPrice"] = 0.0
+        pivoted["UpPrice"] = pivoted["UpPrice"].fillna(0.0)
+        pivoted["DownPrice"] = pivoted["DownPrice"].fillna(0.0)
+        return pivoted
+
     def load_data_files(self, file_paths):
         missing_files = [file_path for file_path in file_paths if not os.path.exists(file_path)]
         if missing_files:
@@ -101,22 +167,24 @@ class Backtester:
             raise ValueError("No data files provided for backtest.")
 
         self.market_data = pd.concat(data_frames, ignore_index=True)
-
-        self.market_data['Timestamp'] = (
-            pd.to_datetime(self.market_data['Timestamp'], format=TIME_FORMAT)
-            .dt.tz_localize(TIMEZONE_ET)
-            .dt.tz_convert('UTC')
-        )
-        self.market_data['TargetTime'] = (
-            pd.to_datetime(self.market_data['TargetTime'], format=TIME_FORMAT)
-            .dt.tz_localize(TIMEZONE_ET)
-            .dt.tz_convert('UTC')
-        )
-        self.market_data['Expiration'] = (
-            pd.to_datetime(self.market_data['Expiration'], format=TIME_FORMAT)
-            .dt.tz_localize(TIMEZONE_ET)
-            .dt.tz_convert('UTC')
-        )
+        if "timestamp_et" in self.market_data.columns:
+            self.market_data = self._normalize_latest_csv(self.market_data)
+        else:
+            self.market_data['Timestamp'] = (
+                pd.to_datetime(self.market_data['Timestamp'], format=TIME_FORMAT)
+                .dt.tz_localize(TIMEZONE_ET)
+                .dt.tz_convert('UTC')
+            )
+            self.market_data['TargetTime'] = (
+                pd.to_datetime(self.market_data['TargetTime'], format=TIME_FORMAT)
+                .dt.tz_localize(TIMEZONE_ET)
+                .dt.tz_convert('UTC')
+            )
+            self.market_data['Expiration'] = (
+                pd.to_datetime(self.market_data['Expiration'], format=TIME_FORMAT)
+                .dt.tz_localize(TIMEZONE_ET)
+                .dt.tz_convert('UTC')
+            )
 
         self.market_data.sort_values(by='Timestamp', inplace=True)
 
