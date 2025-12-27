@@ -9,7 +9,6 @@ import json
 import os
 import queue
 import signal
-import socket
 import subprocess
 import sys
 import threading
@@ -177,11 +176,22 @@ def _parse_ws_target(ws_url):
     return scheme, host, port
 
 
-def _is_ws_reachable(host, port, timeout=0.5):
+def _is_ws_endpoint_active(ws_url, timeout=0.5):
+    async def _probe():
+        try:
+            async with websockets.connect(
+                ws_url,
+                open_timeout=timeout,
+                close_timeout=timeout,
+                ping_interval=None,
+            ):
+                return True
+        except Exception:
+            return False
+
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
+        return asyncio.run(_probe())
+    except RuntimeError:
         return False
 
 
@@ -245,6 +255,13 @@ def _start_logger_process(host, port):
     return proc, None
 
 
+def _format_launch_log_for_error():
+    launch_log = st.session_state.get("launch_log", [])
+    if not launch_log:
+        return "No stdout/stderr captured."
+    return "\n".join(launch_log)
+
+
 st.set_page_config(page_title="Polymarket Logger GUI", layout="wide")
 
 st.sidebar.header("Logger GUI")
@@ -262,10 +279,10 @@ st.sidebar.subheader("Logger Control")
 if not can_manage_logger:
     st.sidebar.info("Start/Stop is available only for local ws:// endpoints.")
 
-endpoint_reachable = can_manage_logger and _is_ws_reachable(host, port)
-logger_already_running = endpoint_reachable and not logger_running
+endpoint_active = can_manage_logger and _is_ws_endpoint_active(ws_url)
+logger_already_running = endpoint_active and not logger_running
 if logger_already_running:
-    st.sidebar.warning("Logger already running.")
+    st.sidebar.warning("Logger already running")
 
 start_clicked = st.sidebar.button(
     "Start Logger",
@@ -294,8 +311,11 @@ if start_clicked and not logger_running and can_manage_logger:
         _append_launch_log("Logger start succeeded.")
     else:
         exit_code = logger_proc.poll() if logger_proc else "unknown"
+        _drain_launch_log_queue()
+        launch_output = _format_launch_log_for_error()
         st.session_state.logger_error = (
-            f"Logger failed to start (exit code {exit_code}). Check launch log."
+            "Logger failed to start (exit code "
+            f"{exit_code}).\n{launch_output}"
         )
         logger_proc = None
         logger_running = False
