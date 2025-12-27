@@ -125,6 +125,12 @@ refresh_interval_seconds = st.sidebar.number_input(
     step=1,
     help="Controls the sleep duration for the auto-refresh loop.",
 )
+time_axis = st.sidebar.selectbox(
+    "Chart time axis",
+    options=("Polymarket Time (ET)", "UK Time"),
+    index=0,
+    help="Switch the chart between Polymarket (ET) and UK timestamps.",
+)
 
 def _normalize_outcome(value, fallback_map):
     if value is None:
@@ -281,15 +287,6 @@ def render_dashboard():
         )
 
     if df is not None and not df.empty:
-        time_options = ["Polymarket Time (ET)"]
-        if "Timestamp_UK" in df.columns:
-            time_options.append("UK Time")
-        time_axis = st.sidebar.selectbox(
-            "Chart time axis",
-            options=tuple(time_options),
-            index=0,
-            help="Switch the chart between Polymarket (ET) and UK timestamps.",
-        )
         time_column = "Timestamp" if time_axis == "Polymarket Time (ET)" else "Timestamp_UK"
         if time_column not in df.columns:
             st.warning("UK timestamps are not available in this data file.")

@@ -28,9 +28,15 @@ python data_logger.py --ui-stream
 python -m streamlit run logger_gui.py
 ```
 
-### 5) Do not run the GUI directly
+### 5) Start the dashboard (in a new terminal, after activating the venv)
 
-**Do not run `python logger_gui.py` directly.**
+```bat
+python -m streamlit run dashboard.py
+```
+
+### 6) Do not run Streamlit apps directly
+
+**Do not run `python logger_gui.py` or `python dashboard.py` directly.**
 
 If you see a Windows “file in use” error, close any previous Streamlit processes (Task Manager or `taskkill /f /im streamlit.exe`) and try again.
 
