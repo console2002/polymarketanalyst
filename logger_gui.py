@@ -255,6 +255,16 @@ def _start_logger_process(host, port):
     return proc, None
 
 
+def _stop_logger_process(proc):
+    if os.name == "nt":
+        if hasattr(signal, "CTRL_BREAK_EVENT"):
+            proc.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            proc.terminate()
+    else:
+        proc.send_signal(signal.SIGINT)
+
+
 def _format_launch_log_for_error():
     launch_log = st.session_state.get("launch_log", [])
     if not launch_log:
@@ -321,16 +331,7 @@ if start_clicked and not logger_running and can_manage_logger:
         logger_running = False
 if stop_clicked and logger_running:
     try:
-        if os.name == "nt":
-            try:
-                if hasattr(signal, "CTRL_BREAK_EVENT"):
-                    logger_proc.send_signal(signal.CTRL_BREAK_EVENT)
-                else:
-                    logger_proc.terminate()
-            except Exception:
-                logger_proc.terminate()
-        else:
-            logger_proc.send_signal(signal.SIGINT)
+        _stop_logger_process(logger_proc)
         logger_running = False
         st.sidebar.info("Stop signal sent to logger.")
         _append_launch_log("Stop signal sent to logger.")
