@@ -25,6 +25,16 @@ def _format_timestamp(value, timezone):
     return value.astimezone(timezone).strftime(TIME_FORMAT)
 
 
+def _format_timestamp_utc(value):
+    if not value:
+        return ""
+    if isinstance(value, str):
+        return value
+    if value.tzinfo is None:
+        value = pytz.utc.localize(value)
+    return value.astimezone(pytz.utc).isoformat()
+
+
 def _get_data_file(timestamp_dt):
     if not timestamp_dt:
         timestamp_dt = datetime.datetime.now(pytz.utc)
@@ -44,10 +54,36 @@ def _ensure_csv(file_path):
                     "Timestamp_UK",
                     "TargetTime",
                     "Expiration",
-                    "UpPrice",
-                    "DownPrice",
-                    "UpVol",
-                    "DownVol",
+                    "UpBestBid",
+                    "DownBestBid",
+                    "UpBestAsk",
+                    "DownBestAsk",
+                    "UpMidPrice",
+                    "DownMidPrice",
+                    "UpSpread",
+                    "DownSpread",
+                    "UpSpreadPct",
+                    "DownSpreadPct",
+                    "UpBidSize",
+                    "DownBidSize",
+                    "UpAskSize",
+                    "DownAskSize",
+                    "UpLastTradePrice",
+                    "DownLastTradePrice",
+                    "UpLastTradeSize",
+                    "DownLastTradeSize",
+                    "UpLastTradeSide",
+                    "DownLastTradeSide",
+                    "UpLastTradeTs",
+                    "DownLastTradeTs",
+                    "UpServerTimeUtc",
+                    "DownServerTimeUtc",
+                    "UpStreamSeqId",
+                    "DownStreamSeqId",
+                    "HeartbeatLastSeen",
+                    "ReconnectCount",
+                    "IsStale",
+                    "LocalTimeUtc",
                 ]
             )
         print(f"Created {file_path}")
@@ -97,7 +133,9 @@ class PriceAggregator:
             if not last:
                 return True
             if (
-                update["best_ask"] != last["best_ask"]
+                update["best_bid"] != last["best_bid"]
+                or update["best_ask"] != last["best_ask"]
+                or update["best_bid_size"] != last["best_bid_size"]
                 or update["best_ask_size"] != last["best_ask_size"]
             ):
                 return True
@@ -118,16 +156,43 @@ class PriceAggregator:
         expiration = self.market_info.get("expiration_time_utc")
         target_time_str = _format_timestamp(target_time, TIMEZONE_UK)
         expiration_str = _format_timestamp(expiration, TIMEZONE_UK)
+        local_time_utc = datetime.datetime.now(pytz.utc)
 
         row = [
             timestamp_et,
             timestamp_uk,
             target_time_str,
             expiration_str,
+            up_update["best_bid"],
+            down_update["best_bid"],
             up_update["best_ask"],
             down_update["best_ask"],
+            up_update["mid"],
+            down_update["mid"],
+            up_update["spread"],
+            down_update["spread"],
+            up_update["spread_pct"],
+            down_update["spread_pct"],
+            up_update["best_bid_size"],
+            down_update["best_bid_size"],
             up_update["best_ask_size"],
             down_update["best_ask_size"],
+            up_update.get("last_trade_price"),
+            down_update.get("last_trade_price"),
+            up_update.get("last_trade_size"),
+            down_update.get("last_trade_size"),
+            up_update.get("last_trade_side"),
+            down_update.get("last_trade_side"),
+            _format_timestamp_utc(up_update.get("last_trade_ts")),
+            _format_timestamp_utc(down_update.get("last_trade_ts")),
+            _format_timestamp_utc(up_update.get("server_time_utc")),
+            _format_timestamp_utc(down_update.get("server_time_utc")),
+            up_update.get("stream_seq_id"),
+            down_update.get("stream_seq_id"),
+            _format_timestamp_utc(up_update.get("heartbeat_last_seen")),
+            up_update.get("reconnect_count"),
+            up_update.get("is_stale"),
+            _format_timestamp_utc(local_time_utc),
         ]
 
         data_file = _get_data_file(timestamp_dt)
