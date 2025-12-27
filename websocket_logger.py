@@ -275,6 +275,7 @@ class PolymarketWebsocketLogger:
         self._mark_heartbeat()
         self._last_clob_message_at = datetime.datetime.now(pytz.utc)
         self._maybe_log_ack("CLOB", payload)
+        self._maybe_log_error("CLOB", payload)
         token_id = _find_token_id(payload)
         event_type = payload.get("event_type") or payload.get("type")
         bids = payload.get("bids")
@@ -355,17 +356,30 @@ class PolymarketWebsocketLogger:
 
         self._last_rtds_message_at = datetime.datetime.now(pytz.utc)
         self._maybe_log_ack("RTDS", payload)
+        self._maybe_log_error("RTDS", payload)
         payload_body = payload.get("payload") if isinstance(payload, dict) else None
+        topic = payload.get("topic") if isinstance(payload, dict) else None
+        message_type = payload.get("type") if isinstance(payload, dict) else None
         token_id = _find_token_id(payload_body or payload)
         trades = None
-        if payload_body is not None:
-            trades = payload_body.get("trades") if isinstance(payload_body, dict) else payload_body
+        if topic == "clob_market" and message_type == "last_trade_price":
+            if isinstance(payload_body, list):
+                trades = payload_body
+            elif payload_body is not None:
+                trades = [payload_body]
         if trades is None:
-            trades = payload.get("trades") or payload.get("data") or payload.get("events")
-        if isinstance(trades, dict):
-            trades = [trades]
-        if not trades:
-            trades = [payload_body] if payload_body is not None else [payload]
+            if payload_body is not None:
+                trades = (
+                    payload_body.get("trades")
+                    if isinstance(payload_body, dict)
+                    else payload_body
+                )
+            if trades is None:
+                trades = payload.get("trades") or payload.get("data") or payload.get("events")
+            if isinstance(trades, dict):
+                trades = [trades]
+            if not trades:
+                trades = [payload_body] if payload_body is not None else [payload]
 
         for trade in trades:
             trade_token = _find_token_id(trade) or token_id
@@ -378,6 +392,7 @@ class PolymarketWebsocketLogger:
                 _parse_timestamp(trade.get("timestamp"))
                 or _parse_timestamp(trade.get("ts"))
                 or _parse_timestamp(trade.get("created_at"))
+                or _parse_timestamp(payload.get("timestamp") if isinstance(payload, dict) else None)
             )
             if price is not None:
                 try:
@@ -448,13 +463,33 @@ class PolymarketWebsocketLogger:
         event_type = payload.get("event_type") or payload.get("type")
         status = payload.get("status")
         action = payload.get("action")
-        ack_types = {"subscribed", "subscribe", "subscription", "ack", "connected", "info"}
+        ack_types = {
+            "subscribed",
+            "subscribe",
+            "subscription",
+            "ack",
+            "connected",
+            "info",
+        }
         if (
             event_type in ack_types
             or status in ("ok", "success")
             or action in ("subscribe", "subscribed", "subscription")
+            or payload.get("success") is True
+            or payload.get("result") in ("ok", "success")
         ):
             print(f"{source} ack: {json.dumps(payload)}")
+
+    def _maybe_log_error(self, source, payload):
+        event_type = payload.get("event_type") or payload.get("type")
+        status = payload.get("status")
+        if (
+            event_type in ("error", "failed", "failure")
+            or status in ("error", "failed", "failure")
+            or "error" in payload
+            or "errors" in payload
+        ):
+            print(f"{source} error: {json.dumps(payload)}")
 
     async def _clob_watchdog(self, ws):
         while not self._shutdown.is_set():
@@ -506,12 +541,7 @@ class PolymarketWebsocketLogger:
         return {"assets_ids": self._asset_ids, "operation": "subscribe"}
 
     def _rtds_subscribe_payload(self):
-        subscription = {"topic": "activity", "type": "trades"}
-        filter_payload = None
-        if self._market_slug:
-            filter_payload = {"market_slug": self._market_slug}
-        elif self._event_slug:
-            filter_payload = {"event_slug": self._event_slug}
-        if filter_payload:
-            subscription["filters"] = json.dumps(filter_payload)
+        subscription = {"topic": "clob_market", "type": "last_trade_price"}
+        if self._asset_ids:
+            subscription["filters"] = json.dumps(self._asset_ids)
         return {"action": "subscribe", "subscriptions": [subscription]}
