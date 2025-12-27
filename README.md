@@ -8,42 +8,27 @@ Run setup (Windows):
 install.bat
 ```
 
+### Quickstart flow (Windows)
+1. Run `install.bat`
+2. Activate the venv (or use `.\.venv\Scripts\python.exe` directly)
+3. Start the logger
+4. Start the GUI with `streamlit run logger_gui.py`
+
+> **Note:** Do not run `python logger_gui.py` directly; Streamlit must be launched with `streamlit run`.
+
 ### Logger only (CSV output)
-If you ran `install.bat`, use the virtualenv Python (not your system Python):
 ```bat
 .\.venv\Scripts\python.exe data_logger.py
 ```
-macOS/Linux (after activating the venv):
-```bash
-python data_logger.py
-```
 
-### GUI only (connects to an existing logger stream)
-If you ran `install.bat`:
-```bat
-.\.venv\Scripts\python.exe -m streamlit run logger_gui.py
-```
-macOS/Linux (after activating the venv):
-```bash
-streamlit run logger_gui.py
-```
-
-### GUI + logger (recommended)
-Start the logger with the WebSocket UI stream enabled:
+### Logger + GUI (two terminals)
+Terminal 1 (logger with UI stream):
 ```bat
 .\.venv\Scripts\python.exe data_logger.py --ui-stream
 ```
-macOS/Linux (after activating the venv):
-```bash
-python data_logger.py --ui-stream
-```
-Then, in a new terminal:
+Terminal 2 (GUI):
 ```bat
 .\.venv\Scripts\python.exe -m streamlit run logger_gui.py
-```
-macOS/Linux (after activating the venv):
-```bash
-streamlit run logger_gui.py
 ```
 
 ### macOS/Linux setup (venv activation)
