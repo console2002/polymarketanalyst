@@ -956,24 +956,35 @@ def render_dashboard():
             elif st.session_state.autotune_message:
                 st.caption(st.session_state.autotune_message)
 
+        if "window_summary_minutes_after_open" not in st.session_state:
+            st.session_state.window_summary_minutes_after_open = minutes_after_open
+        if "window_summary_entry_threshold" not in st.session_state:
+            st.session_state.window_summary_entry_threshold = entry_threshold
+
+        summary_minutes_threshold = pd.Timedelta(
+            minutes=int(st.session_state.window_summary_minutes_after_open)
+        )
+        summary_probability_threshold = float(
+            st.session_state.window_summary_entry_threshold
+        )
+
         summary_rows = []
-        if total_markets:
-            target_order = active_targets
-        else:
-            target_order = df_window['TargetTime_dt'].dropna().drop_duplicates().tolist()
-        full_target_dt_order = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
-        full_target_dt_indices = {target: idx for idx, target in enumerate(full_target_dt_order)}
-        full_last_target_dt_index = len(full_target_dt_order) - 1
+        summary_target_dt_order = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
+        target_order = summary_target_dt_order
+        full_target_dt_indices = {target: idx for idx, target in enumerate(summary_target_dt_order)}
+        full_last_target_dt_index = len(summary_target_dt_order) - 1
 
         for idx, target_time in enumerate(target_order):
-            market_group = df_window[df_window['TargetTime_dt'] == target_time].sort_values(time_column)
+            market_group = df[df['TargetTime_dt'] == target_time].sort_values(time_column)
             if market_group.empty:
                 continue
             market_open = _align_market_open(market_group[time_column].min())
-            eligible = market_group[market_group[time_column] >= market_open + minutes_threshold].copy()
+            eligible = market_group[
+                market_group[time_column] >= market_open + summary_minutes_threshold
+            ].copy()
 
             def find_crossing(series):
-                above = series >= probability_threshold
+                above = series >= summary_probability_threshold
                 crossings = above & ~above.shift(fill_value=False)
                 if crossings.any():
                     return crossings[crossings].index[0]
