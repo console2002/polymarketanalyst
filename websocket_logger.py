@@ -205,9 +205,10 @@ class PolymarketWebsocketLogger:
     async def _run_clob_socket(self):
         backoff = 1
         while not self._shutdown.is_set():
+            ws_url = build_clob_ws_url()
             try:
                 async with websockets.connect(
-                    CLOB_MARKET_WS_URL,
+                    ws_url,
                     ping_interval=None,
                     max_queue=None,
                 ) as ws:
@@ -228,18 +229,26 @@ class PolymarketWebsocketLogger:
                         "CLOB error: websocket handshake failed with HTTP 403. "
                         "Check geoblock status before retrying."
                     )
+                    logger.error(
+                        "CLOB websocket handshake failed (status %s) for %s: %s",
+                        exc.status_code,
+                        ws_url,
+                        exc,
+                    )
                     self._shutdown.set()
                     return
                 logger.warning(
-                    "CLOB websocket handshake failed (status %s): %s",
+                    "CLOB websocket handshake failed (status %s) for %s: %s",
                     exc.status_code,
+                    ws_url,
                     exc,
                 )
                 await asyncio.sleep(self._next_backoff(backoff))
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
             except Exception as exc:
                 logger.warning(
-                    "CLOB websocket connection failed (%s): %s",
+                    "CLOB websocket connection failed for %s (%s): %s",
+                    ws_url,
                     type(exc).__name__,
                     exc,
                 )
