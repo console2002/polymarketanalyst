@@ -857,11 +857,10 @@ def render_dashboard():
         with gauge_col:
             gauge_value = 0 if pd.isna(strike_rate) else strike_rate
             gauge_value = max(0, min(100, gauge_value))
-            green_end = gauge_value
-            red_start = gauge_value
-            if gauge_value >= 100:
-                green_end = 100
-                red_start = 100
+            win_rate_needed_pct = 0 if pd.isna(win_rate_needed) else win_rate_needed
+            win_rate_needed_pct = max(0, min(100, win_rate_needed_pct))
+            green_end = win_rate_needed_pct
+            red_start = win_rate_needed_pct
             gauge_fig = go.Figure(
                 go.Indicator(
                     mode="gauge+number",
