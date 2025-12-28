@@ -6,7 +6,7 @@ def run_autotune(
     df,
     time_column,
     calculate_metrics,
-    minutes_range=range(1, 61),
+    minutes_range=range(1, 15),
     threshold_range=np.arange(0.40, 0.801, 0.01),
     progress_callback=None,
 ):
