@@ -14,7 +14,7 @@ def _sample_market_info():
 def test_build_clob_ws_url():
     assert (
         websocket_logger.build_clob_ws_url()
-        == "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+        == "wss://ws-subscriptions-clob.polymarket.com"
     )
 
 
