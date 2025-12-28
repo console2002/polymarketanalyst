@@ -272,6 +272,12 @@ def _infer_interval_seconds(timestamp_series):
     return max(1, int(round(median_seconds)))
 
 
+def _align_market_open(timestamp):
+    if timestamp is None or pd.isna(timestamp):
+        return pd.NaT
+    return pd.Timestamp(timestamp).floor("15min")
+
+
 def _get_close_prices(market_group, time_column, close_window_points=6):
     market_group = market_group.sort_values(time_column)
     if market_group.empty:
@@ -430,10 +436,11 @@ def render_dashboard():
             latest_timestamp = df_window[time_column].max()
             market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
             market_start_time = market_rows[time_column].min()
+            market_open_time = _align_market_open(market_start_time)
             if pd.isna(market_start_time):
                 countdown_display = "N/A"
             else:
-                market_end_time = market_start_time + pd.Timedelta(minutes=15)
+                market_end_time = market_open_time + pd.Timedelta(minutes=15)
                 remaining_seconds = int((market_end_time - latest_timestamp).total_seconds())
                 remaining_seconds = max(0, remaining_seconds)
                 minutes_left = remaining_seconds // 60
@@ -623,7 +630,7 @@ def render_dashboard():
             market_group = df_window[df_window['TargetTime'] == target_time].sort_values(time_column)
             if market_group.empty:
                 continue
-            market_open = market_group[time_column].iloc[0]
+            market_open = _align_market_open(market_group[time_column].min())
             open_threshold_time = market_open + minutes_threshold
 
             add_vline_all_rows(
@@ -749,7 +756,7 @@ def render_dashboard():
             market_group = df_window[df_window['TargetTime_dt'] == target_time].sort_values(time_column)
             if market_group.empty:
                 continue
-            market_open = market_group[time_column].iloc[0]
+            market_open = _align_market_open(market_group[time_column].min())
             eligible = market_group[market_group[time_column] >= market_open + minutes_threshold].copy()
 
             def find_crossing(series):
