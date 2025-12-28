@@ -302,6 +302,83 @@ def _get_close_prices(market_group, time_column, close_window_points=6):
 
     return close_up, close_down
 
+
+def _calculate_strike_rate_metrics(df, time_column, minutes_after_open, entry_threshold):
+    minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
+    probability_threshold = float(entry_threshold)
+    closed_outcomes = []
+    entry_prices = []
+    full_target_dt_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
+    full_target_dt_indices = {target: idx for idx, target in enumerate(full_target_dt_order)}
+    full_last_target_dt_index = len(full_target_dt_order) - 1
+
+    def find_crossing(series):
+        above = series >= probability_threshold
+        crossings = above & ~above.shift(fill_value=False)
+        if crossings.any():
+            return crossings[crossings].index[0]
+        return None
+
+    for target_time in full_target_dt_order:
+        market_group = df[df["TargetTime_dt"] == target_time].sort_values(time_column)
+        if market_group.empty:
+            continue
+        market_open = _align_market_open(market_group[time_column].min())
+        eligible = market_group[market_group[time_column] >= market_open + minutes_threshold].copy()
+
+        expected_side = None
+        cross_value = None
+        if not eligible.empty:
+            up_cross_index = find_crossing(eligible["UpPrice"])
+            down_cross_index = find_crossing(eligible["DownPrice"])
+            candidates = []
+            if up_cross_index is not None:
+                candidates.append(
+                    ("Up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, "UpPrice"])
+                )
+            if down_cross_index is not None:
+                candidates.append(
+                    ("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, "DownPrice"])
+                )
+            if candidates:
+                expected_side, _, cross_value = min(candidates, key=lambda item: item[1])
+
+        market_end_time = market_open + pd.Timedelta(minutes=15)
+        market_close_time = market_group[time_column].iloc[-1]
+        full_index = full_target_dt_indices.get(target_time)
+        market_closed = (
+            (full_index is not None and full_index < full_last_target_dt_index)
+            or market_close_time >= market_end_time
+        )
+        if market_closed and expected_side:
+            final_up, final_down = _get_close_prices(market_group, time_column)
+            if pd.isna(final_up) or pd.isna(final_down):
+                continue
+            if final_up == final_down:
+                outcome = "Tie"
+            elif expected_side == "Up":
+                outcome = "Win" if final_up > final_down else "Lose"
+            else:
+                outcome = "Win" if final_down > final_up else "Lose"
+            closed_outcomes.append(outcome)
+            if cross_value is not None and not pd.isna(cross_value):
+                entry_prices.append(cross_value)
+
+    recent_outcomes = closed_outcomes[-100:]
+    total_count = min(100, len(recent_outcomes))
+    wins = sum(1 for outcome in recent_outcomes if outcome == "Win")
+    strike_rate = (wins / total_count * 100) if total_count else np.nan
+    recent_entry_prices = entry_prices[-100:]
+    if recent_entry_prices:
+        avg_entry_price = sum(recent_entry_prices) / len(recent_entry_prices)
+        gain = 1 - avg_entry_price
+        loss = 1.0
+        win_rate_needed = loss / (gain + loss) * 100
+    else:
+        avg_entry_price = np.nan
+        win_rate_needed = np.nan
+    return strike_rate, avg_entry_price, win_rate_needed, total_count
+
 def render_dashboard():
     df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
     if selected_date and resolved_date and selected_date != resolved_date:
@@ -436,6 +513,10 @@ def render_dashboard():
             st.session_state.last_minutes_after_open = minutes_after_open
         if "last_entry_threshold" not in st.session_state:
             st.session_state.last_entry_threshold = entry_threshold
+        if "autotune_result" not in st.session_state:
+            st.session_state.autotune_result = None
+        if "autotune_message" not in st.session_state:
+            st.session_state.autotune_message = None
 
         latest_up_vol = latest.get("UpVol")
         latest_down_vol = latest.get("DownVol")
@@ -773,75 +854,15 @@ def render_dashboard():
             should_recalculate_strike_rate = True
 
         if should_recalculate_strike_rate:
-            closed_outcomes = []
-            entry_prices = []
-            full_target_dt_order = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
-            full_target_dt_indices = {target: idx for idx, target in enumerate(full_target_dt_order)}
-            full_last_target_dt_index = len(full_target_dt_order) - 1
-            for target_time in full_target_dt_order:
-                market_group = df[df['TargetTime_dt'] == target_time].sort_values(time_column)
-                if market_group.empty:
-                    continue
-                market_open = _align_market_open(market_group[time_column].min())
-                eligible = market_group[market_group[time_column] >= market_open + minutes_threshold].copy()
-
-                def find_crossing(series):
-                    above = series >= probability_threshold
-                    crossings = above & ~above.shift(fill_value=False)
-                    if crossings.any():
-                        return crossings[crossings].index[0]
-                    return None
-
-                expected_side = None
-                cross_value = None
-                if not eligible.empty:
-                    up_cross_index = find_crossing(eligible['UpPrice'])
-                    down_cross_index = find_crossing(eligible['DownPrice'])
-                    candidates = []
-                    if up_cross_index is not None:
-                        candidates.append(("Up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, 'UpPrice']))
-                    if down_cross_index is not None:
-                        candidates.append(("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, 'DownPrice']))
-                    if candidates:
-                        expected_side, _, cross_value = min(candidates, key=lambda item: item[1])
-
-                market_end_time = market_open + pd.Timedelta(minutes=15)
-                market_close_time = market_group[time_column].iloc[-1]
-                full_index = full_target_dt_indices.get(target_time)
-                market_closed = (
-                    (full_index is not None and full_index < full_last_target_dt_index)
-                    or market_close_time >= market_end_time
-                )
-                if market_closed and expected_side:
-                    final_up, final_down = _get_close_prices(market_group, time_column)
-                    if pd.isna(final_up) or pd.isna(final_down):
-                        continue
-                    if final_up == final_down:
-                        outcome = "Tie"
-                    elif expected_side == "Up":
-                        outcome = "Win" if final_up > final_down else "Lose"
-                    else:
-                        outcome = "Win" if final_down > final_up else "Lose"
-                    closed_outcomes.append(outcome)
-                    if cross_value is not None and not pd.isna(cross_value):
-                        entry_prices.append(cross_value)
-
-            recent_outcomes = closed_outcomes[-100:]
-            total_count = min(100, len(recent_outcomes))
-            wins = sum(1 for outcome in recent_outcomes if outcome == "Win")
-            st.session_state.strike_rate = (wins / total_count * 100) if total_count else np.nan
-            # Keep entry price averages aligned to the same closed-market population used for strike rate.
-            recent_entry_prices = entry_prices[-100:]
-            if recent_entry_prices:
-                avg_entry_price = sum(recent_entry_prices) / len(recent_entry_prices)
-                gain = 1 - avg_entry_price
-                loss = 1.0
-                win_rate_needed = loss / (gain + loss)
-                st.session_state.avg_entry_price = avg_entry_price
-                st.session_state.win_rate_needed = win_rate_needed * 100
-            else:
-                st.session_state.avg_entry_price = np.nan
-                st.session_state.win_rate_needed = np.nan
+            strike_rate, avg_entry_price, win_rate_needed, _ = _calculate_strike_rate_metrics(
+                df,
+                time_column,
+                minutes_after_open,
+                entry_threshold,
+            )
+            st.session_state.strike_rate = strike_rate
+            st.session_state.avg_entry_price = avg_entry_price
+            st.session_state.win_rate_needed = win_rate_needed
             st.session_state.last_market_open = current_open
             st.session_state.strike_rate_source_date = resolved_date
             st.session_state.last_minutes_after_open = minutes_after_open
@@ -893,8 +914,48 @@ def render_dashboard():
             metrics_col1, metrics_col2 = st.columns(2)
             with metrics_col1:
                 st.metric("Average Entry", average_entry_display)
+                autotune_clicked = st.button("Autotune", key="autotune_button")
             with metrics_col2:
                 st.metric("Win Rate Needed", win_rate_display)
+            if autotune_clicked:
+                best_result = None
+                best_score = None
+                for minutes_value in range(1, 61):
+                    for threshold_value in np.arange(0.40, 0.801, 0.01):
+                        strike, avg_entry, win_rate, total_count = _calculate_strike_rate_metrics(
+                            df,
+                            time_column,
+                            minutes_value,
+                            round(float(threshold_value), 2),
+                        )
+                        if total_count == 0 or pd.isna(win_rate) or pd.isna(strike):
+                            continue
+                        score = (win_rate, -strike)
+                        if best_score is None or score < best_score:
+                            best_score = score
+                            best_result = {
+                                "minutes_after_open": minutes_value,
+                                "entry_threshold": round(float(threshold_value), 2),
+                                "strike_rate": strike,
+                                "win_rate_needed": win_rate,
+                            }
+                if best_result:
+                    st.session_state.autotune_result = best_result
+                    st.session_state.autotune_message = None
+                else:
+                    st.session_state.autotune_result = None
+                    st.session_state.autotune_message = "No viable data for autotune"
+            if st.session_state.autotune_result:
+                result = st.session_state.autotune_result
+                st.caption(
+                    "Best: "
+                    f"minutes_after_open={result['minutes_after_open']}, "
+                    f"entry_threshold={result['entry_threshold']:.2f}, "
+                    f"strike_rate={result['strike_rate']:.2f}%, "
+                    f"win_rate_needed={result['win_rate_needed']:.2f}%"
+                )
+            elif st.session_state.autotune_message:
+                st.caption(st.session_state.autotune_message)
 
         summary_rows = []
         if total_markets:
