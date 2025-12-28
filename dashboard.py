@@ -424,6 +424,13 @@ def render_dashboard():
             .transform(lambda x: x.diff().rolling(momentum_window_points, min_periods=1).mean())
         )
 
+        latest_timestamp = df_window[time_column].max()
+        current_open = _align_market_open(latest_timestamp)
+        if "last_market_open" not in st.session_state:
+            st.session_state.last_market_open = None
+        if "strike_rate" not in st.session_state:
+            st.session_state.strike_rate = np.nan
+
         latest_up_vol = latest.get("UpVol")
         latest_down_vol = latest.get("DownVol")
         total_liquidity = latest_up_vol + latest_down_vol
@@ -433,7 +440,6 @@ def render_dashboard():
 
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            latest_timestamp = df_window[time_column].max()
             market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
             market_start_time = market_rows[time_column].min()
             market_open_time = _align_market_open(market_start_time)
@@ -738,12 +744,100 @@ def render_dashboard():
 
         # Enable crosshair (spike lines) across both subplots
         fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
-
-        st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
-
-        summary_rows = []
         probability_threshold = float(entry_threshold)
         minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
+        if current_open != st.session_state.last_market_open:
+            closed_outcomes = []
+            full_target_dt_order = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
+            full_target_dt_indices = {target: idx for idx, target in enumerate(full_target_dt_order)}
+            full_last_target_dt_index = len(full_target_dt_order) - 1
+            for target_time in full_target_dt_order:
+                market_group = df[df['TargetTime_dt'] == target_time].sort_values(time_column)
+                if market_group.empty:
+                    continue
+                market_open = _align_market_open(market_group[time_column].min())
+                eligible = market_group[market_group[time_column] >= market_open + minutes_threshold].copy()
+
+                def find_crossing(series):
+                    above = series >= probability_threshold
+                    crossings = above & ~above.shift(fill_value=False)
+                    if crossings.any():
+                        return crossings[crossings].index[0]
+                    return None
+
+                expected_side = None
+                if not eligible.empty:
+                    up_cross_index = find_crossing(eligible['UpPrice'])
+                    down_cross_index = find_crossing(eligible['DownPrice'])
+                    candidates = []
+                    if up_cross_index is not None:
+                        candidates.append(("Up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, 'UpPrice']))
+                    if down_cross_index is not None:
+                        candidates.append(("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, 'DownPrice']))
+                    if candidates:
+                        expected_side, _, _ = min(candidates, key=lambda item: item[1])
+
+                market_end_time = market_open + pd.Timedelta(minutes=15)
+                market_close_time = market_group[time_column].iloc[-1]
+                full_index = full_target_dt_indices.get(target_time)
+                market_closed = (
+                    (full_index is not None and full_index < full_last_target_dt_index)
+                    or market_close_time >= market_end_time
+                )
+                if market_closed and expected_side:
+                    final_up, final_down = _get_close_prices(market_group, time_column)
+                    if pd.isna(final_up) or pd.isna(final_down):
+                        continue
+                    if final_up == final_down:
+                        outcome = "Tie"
+                    elif expected_side == "Up":
+                        outcome = "Win" if final_up > final_down else "Lose"
+                    else:
+                        outcome = "Win" if final_down > final_up else "Lose"
+                    closed_outcomes.append(outcome)
+
+            recent_outcomes = closed_outcomes[-100:]
+            total_count = min(100, len(recent_outcomes))
+            wins = sum(1 for outcome in recent_outcomes if outcome == "Win")
+            st.session_state.strike_rate = (wins / total_count * 100) if total_count else np.nan
+            st.session_state.last_market_open = current_open
+
+        strike_rate = st.session_state.strike_rate
+
+        chart_col, gauge_col = st.columns([4, 1])
+        with chart_col:
+            st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
+        with gauge_col:
+            gauge_value = 0 if pd.isna(strike_rate) else strike_rate
+            gauge_fig = go.Figure(
+                go.Indicator(
+                    mode="gauge+number",
+                    value=gauge_value,
+                    number={"suffix": "%", "valueformat": ".1f"},
+                    title={"text": "Strike Rate"},
+                    gauge={
+                        "shape": "angular",
+                        "axis": {"range": [0, 100]},
+                        "bar": {"color": "rgba(0, 0, 0, 0)"},
+                        "steps": [
+                            {"range": [0, 50], "color": "green"},
+                            {"range": [50, 100], "color": "red"},
+                        ],
+                        "threshold": {
+                            "line": {"color": "black", "width": 3},
+                            "thickness": 0.8,
+                            "value": gauge_value,
+                        },
+                    },
+                )
+            )
+            gauge_fig.update_layout(
+                height=250,
+                margin=dict(l=10, r=10, t=60, b=10),
+            )
+            st.plotly_chart(gauge_fig, width='stretch', config={'displayModeBar': False})
+
+        summary_rows = []
         if total_markets:
             target_order = active_targets
         else:
