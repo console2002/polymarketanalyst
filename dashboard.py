@@ -427,9 +427,11 @@ def render_dashboard():
         latest_timestamp = df_window[time_column].max()
         current_open = _align_market_open(latest_timestamp)
         if "last_market_open" not in st.session_state:
-            st.session_state.last_market_open = None
+            st.session_state.last_market_open = pd.NaT
         if "strike_rate" not in st.session_state:
             st.session_state.strike_rate = np.nan
+        if "strike_rate_source_date" not in st.session_state:
+            st.session_state.strike_rate_source_date = resolved_date
 
         latest_up_vol = latest.get("UpVol")
         latest_down_vol = latest.get("DownVol")
@@ -746,7 +748,18 @@ def render_dashboard():
         fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
         probability_threshold = float(entry_threshold)
         minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
-        if current_open != st.session_state.last_market_open:
+        should_recalculate_strike_rate = False
+        last_market_open = st.session_state.last_market_open
+        if resolved_date != st.session_state.strike_rate_source_date:
+            should_recalculate_strike_rate = True
+        elif pd.isna(current_open):
+            should_recalculate_strike_rate = False
+        elif pd.isna(last_market_open):
+            should_recalculate_strike_rate = True
+        else:
+            should_recalculate_strike_rate = current_open > last_market_open
+
+        if should_recalculate_strike_rate:
             closed_outcomes = []
             full_target_dt_order = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
             full_target_dt_indices = {target: idx for idx, target in enumerate(full_target_dt_order)}
@@ -801,6 +814,7 @@ def render_dashboard():
             wins = sum(1 for outcome in recent_outcomes if outcome == "Win")
             st.session_state.strike_rate = (wins / total_count * 100) if total_count else np.nan
             st.session_state.last_market_open = current_open
+            st.session_state.strike_rate_source_date = resolved_date
 
         strike_rate = st.session_state.strike_rate
 
