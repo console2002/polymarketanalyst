@@ -26,7 +26,7 @@ from websockets.exceptions import InvalidMessage
 from find_new_market import generate_market_url
 from websocket_logger import PolymarketWebsocketLogger, STALE_THRESHOLD_SECONDS
 
-LOGGING_INTERVAL_SECONDS = 1
+LOGGING_INTERVAL_SECONDS = 1  # logh time in seconds, use x for fastest.
 NO_UPDATE_WARNING_SECONDS = 45
 STATUS_CHECK_INTERVAL_SECONDS = 5
 TIMEZONE_ET = pytz.timezone("US/Eastern")
@@ -107,6 +107,30 @@ def _ensure_utc(value):
     if value.tzinfo is None:
         return pytz.utc.localize(value)
     return value.astimezone(pytz.utc)
+
+
+def _resolve_logging_interval():
+    value = LOGGING_INTERVAL_SECONDS
+    if isinstance(value, str):
+        if value.strip().lower() == "x":
+            return None
+        try:
+            value = float(value)
+        except ValueError:
+            return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def _interval_bucket(timestamp_dt, interval_seconds):
+    if timestamp_dt.tzinfo is None:
+        timestamp_dt = pytz.utc.localize(timestamp_dt)
+    return int(timestamp_dt.timestamp() // interval_seconds)
 
 
 def _read_logger_pid():
@@ -445,6 +469,8 @@ class PriceAggregator:
         self.last_update_ts = None
         self._last_warning_time = None
         self._start_time = datetime.datetime.now(pytz.utc)
+        self._interval_seconds = _resolve_logging_interval()
+        self._last_interval_bucket = None
         self.outcome_order = market_info.get("outcomes") or []
         self._current_file_path = None
         self._current_file_handle = None
@@ -467,13 +493,24 @@ class PriceAggregator:
 
         now = update_timestamp
         prices_changed = self._prices_changed()
-        interval_elapsed = (
-            self.last_log_time is None
-            or (now - self.last_log_time).total_seconds() >= LOGGING_INTERVAL_SECONDS
-        )
+        if self._interval_seconds is None:
+            interval_elapsed = (
+                self.last_log_time is None
+                or (now - self.last_log_time).total_seconds() >= 1
+            )
+            should_log = prices_changed or interval_elapsed
+        else:
+            interval_bucket = _interval_bucket(now, self._interval_seconds)
+            interval_elapsed = (
+                self._last_interval_bucket is None
+                or interval_bucket != self._last_interval_bucket
+            )
+            should_log = interval_elapsed
 
-        if prices_changed or interval_elapsed:
+        if should_log:
             self._log_row(now)
+            if self._interval_seconds is not None:
+                self._last_interval_bucket = interval_bucket
 
     async def monitor_no_updates(
         self,
