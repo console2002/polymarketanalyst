@@ -233,9 +233,17 @@ def _stop_logger_pid(pid):
                 check=False,
             )
             if result.returncode != 0:
-                detail = result.stderr.strip() or result.stdout.strip()
-                detail = detail or "unknown error"
-                return False, f"Failed to stop logger PID {pid}: {detail}"
+                force_result = subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if force_result.returncode != 0:
+                    detail = force_result.stderr.strip() or force_result.stdout.strip()
+                    detail = detail or result.stderr.strip() or result.stdout.strip()
+                    detail = detail or "unknown error"
+                    return False, f"Failed to stop logger PID {pid}: {detail}"
         else:
             os.kill(pid, signal.SIGTERM)
     except OSError as exc:
