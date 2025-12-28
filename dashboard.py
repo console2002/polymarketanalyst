@@ -272,21 +272,29 @@ def _infer_interval_seconds(timestamp_series):
     return max(1, int(round(median_seconds)))
 
 
-def _get_close_prices(market_group, time_column):
+def _get_close_prices(market_group, time_column, close_window_points=6):
     market_group = market_group.sort_values(time_column)
-    last_row = market_group.iloc[-1]
-    last_up = last_row.get("UpPrice", np.nan)
-    last_down = last_row.get("DownPrice", np.nan)
-    both_zero = (pd.isna(last_up) or last_up == 0) and (pd.isna(last_down) or last_down == 0)
-    if both_zero:
-        last_up = _last_non_zero(market_group["UpPrice"])
-        last_down = _last_non_zero(market_group["DownPrice"])
-    else:
-        if pd.isna(last_up):
-            last_up = _last_non_zero(market_group["UpPrice"])
-        if pd.isna(last_down):
-            last_down = _last_non_zero(market_group["DownPrice"])
-    return last_up, last_down
+    if market_group.empty:
+        return np.nan, np.nan
+
+    window_points = max(close_window_points, int(len(market_group) * 0.1))
+    tail_group = market_group.tail(window_points)
+
+    def _median_non_zero(series):
+        cleaned = series.replace(0, np.nan).dropna()
+        if cleaned.empty:
+            return np.nan
+        return cleaned.median()
+
+    close_up = _median_non_zero(tail_group["UpPrice"])
+    close_down = _median_non_zero(tail_group["DownPrice"])
+
+    if pd.isna(close_up):
+        close_up = _last_non_zero(market_group["UpPrice"])
+    if pd.isna(close_down):
+        close_down = _last_non_zero(market_group["DownPrice"])
+
+    return close_up, close_down
 
 def render_dashboard():
     df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
