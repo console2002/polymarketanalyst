@@ -950,24 +950,25 @@ def render_dashboard():
                 elif expected_side == "Down":
                     outcome = "Win" if final_down > final_up else "Lose"
 
-            total_liq_series = market_group['UpVol'] + market_group['DownVol']
-            up_price_series = market_group['UpPrice'].replace(0, np.nan)
-            summary_rows.append(
-                {
-                    "TargetTime": market_group['TargetTime'].iloc[0],
-                    "Market Open": market_open,
-                    "First Crossing Side": expected_side or "None",
-                    "Crossing Time": cross_time,
-                    "Crossing Price": cross_value,
-                    "Final UpPrice": final_up,
-                    "Final DownPrice": final_down,
-                    "Win/Lose": outcome,
-                    "Mean Total Liquidity": total_liq_series.mean(),
-                    "Max Total Liquidity": total_liq_series.max(),
-                    "Max UpPrice": up_price_series.max(),
-                    "Min UpPrice": up_price_series.min(),
-                }
-            )
+            if outcome == "Lose":
+                total_liq_series = market_group['UpVol'] + market_group['DownVol']
+                up_price_series = market_group['UpPrice'].replace(0, np.nan)
+                summary_rows.append(
+                    {
+                        "TargetTime": market_group['TargetTime'].iloc[0],
+                        "Market Open": market_open,
+                        "First Crossing Side": expected_side or "None",
+                        "Crossing Time": cross_time,
+                        "Crossing Price": cross_value,
+                        "Final UpPrice": final_up,
+                        "Final DownPrice": final_down,
+                        "Win/Lose": outcome,
+                        "Mean Total Liquidity": total_liq_series.mean(),
+                        "Max Total Liquidity": total_liq_series.max(),
+                        "Max UpPrice": up_price_series.max(),
+                        "Min UpPrice": up_price_series.min(),
+                    }
+                )
 
         with st.expander("Window summary"):
             summary_df = pd.DataFrame(summary_rows)
