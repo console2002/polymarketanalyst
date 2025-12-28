@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
 import re
+from autotune import run_autotune
 
 
 # Get the directory of the current script
@@ -918,27 +919,24 @@ def render_dashboard():
             with metrics_col2:
                 st.metric("Win Rate Needed", win_rate_display)
             if autotune_clicked:
+                progress_container = st.empty()
+                status_container = st.status("Autotuning…", expanded=True)
+                progress_bar = progress_container.progress(0)
                 best_result = None
-                best_score = None
-                for minutes_value in range(1, 61):
-                    for threshold_value in np.arange(0.40, 0.801, 0.01):
-                        strike, avg_entry, win_rate, total_count = _calculate_strike_rate_metrics(
-                            df,
-                            time_column,
-                            minutes_value,
-                            round(float(threshold_value), 2),
-                        )
-                        if total_count == 0 or pd.isna(win_rate) or pd.isna(strike):
-                            continue
-                        score = (win_rate, -strike)
-                        if best_score is None or score < best_score:
-                            best_score = score
-                            best_result = {
-                                "minutes_after_open": minutes_value,
-                                "entry_threshold": round(float(threshold_value), 2),
-                                "strike_rate": strike,
-                                "win_rate_needed": win_rate,
-                            }
+
+                def _progress_callback(current_step, total_steps, message):
+                    progress_bar.progress(current_step / total_steps)
+                    status_container.write(message)
+
+                with status_container:
+                    best_result = run_autotune(
+                        df,
+                        time_column,
+                        _calculate_strike_rate_metrics,
+                        progress_callback=_progress_callback,
+                    )
+                progress_container.empty()
+                status_container.update(state="complete", label="Autotune complete")
                 if best_result:
                     st.session_state.autotune_result = best_result
                     st.session_state.autotune_message = None
@@ -952,7 +950,8 @@ def render_dashboard():
                     f"minutes_after_open={result['minutes_after_open']}, "
                     f"entry_threshold={result['entry_threshold']:.2f}, "
                     f"strike_rate={result['strike_rate']:.2f}%, "
-                    f"win_rate_needed={result['win_rate_needed']:.2f}%"
+                    f"win_rate_needed={result['win_rate_needed']:.2f}%, "
+                    f"edge={result['edge']:.2f}%"
                 )
             elif st.session_state.autotune_message:
                 st.caption(st.session_state.autotune_message)
