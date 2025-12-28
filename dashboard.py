@@ -890,8 +890,11 @@ def render_dashboard():
             st.plotly_chart(gauge_fig, width='stretch', config={'displayModeBar': False})
             average_entry_display = f"{avg_entry_price:.2f}" if not pd.isna(avg_entry_price) else "N/A"
             win_rate_display = f"{win_rate_needed:.2f}%" if not pd.isna(win_rate_needed) else "N/A"
-            st.metric("Average Entry", average_entry_display)
-            st.metric("Win Rate Needed", win_rate_display)
+            metrics_col1, metrics_col2 = st.columns(2)
+            with metrics_col1:
+                st.metric("Average Entry", average_entry_display)
+            with metrics_col2:
+                st.metric("Win Rate Needed", win_rate_display)
 
         summary_rows = []
         if total_markets:
