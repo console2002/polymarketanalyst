@@ -10,9 +10,10 @@ A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down pr
 install.bat
 ```
 
-### 2) Activate the virtual environment and use only its Python
+### 2) Move into the repo and activate the virtual environment
 
 ```bat
+cd /d D:\GitHub\polymarketanalyst
 .\.venv\Scripts\activate
 ```
 
@@ -31,12 +32,12 @@ python -m streamlit run logger_gui.py
 ### 5) Start the dashboard (in a new terminal, after activating the venv)
 
 ```bat
-python -m streamlit run dashboard.py
+streamlit run D:\GitHub\polymarketanalyst\dashboard.py
 ```
 
 ### 6) Do not run Streamlit apps directly
 
-**Do not run `python logger_gui.py` or `python dashboard.py` directly.**
+**Do not run `python logger_gui.py` or `python dashboard.py` directly.** If you see the Streamlit warning suggesting `streamlit run ...`, switch to the command in step 5.
 
 If you see a Windows “file in use” error, close any previous Streamlit processes (Task Manager or `taskkill /f /im streamlit.exe`) and try again.
 
