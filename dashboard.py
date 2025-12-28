@@ -432,6 +432,10 @@ def render_dashboard():
             st.session_state.strike_rate = np.nan
         if "strike_rate_source_date" not in st.session_state:
             st.session_state.strike_rate_source_date = resolved_date
+        if "last_minutes_after_open" not in st.session_state:
+            st.session_state.last_minutes_after_open = minutes_after_open
+        if "last_entry_threshold" not in st.session_state:
+            st.session_state.last_entry_threshold = entry_threshold
 
         latest_up_vol = latest.get("UpVol")
         latest_down_vol = latest.get("DownVol")
@@ -759,6 +763,15 @@ def render_dashboard():
         else:
             should_recalculate_strike_rate = current_open > last_market_open
 
+        minutes_after_open_changed = (
+            minutes_after_open != st.session_state.last_minutes_after_open
+        )
+        entry_threshold_changed = (
+            entry_threshold != st.session_state.last_entry_threshold
+        )
+        if (minutes_after_open_changed or entry_threshold_changed) and not pd.isna(current_open):
+            should_recalculate_strike_rate = True
+
         if should_recalculate_strike_rate:
             closed_outcomes = []
             full_target_dt_order = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
@@ -815,6 +828,8 @@ def render_dashboard():
             st.session_state.strike_rate = (wins / total_count * 100) if total_count else np.nan
             st.session_state.last_market_open = current_open
             st.session_state.strike_rate_source_date = resolved_date
+            st.session_state.last_minutes_after_open = minutes_after_open
+            st.session_state.last_entry_threshold = entry_threshold
 
         strike_rate = st.session_state.strike_rate
 
