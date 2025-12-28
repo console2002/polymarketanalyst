@@ -9,12 +9,16 @@ from dataclasses import dataclass, field
 import pytz
 import websockets
 
-CLOB_MARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+CLOB_MARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com"
 CLOB_PING_SECONDS = 10
 MAX_BACKOFF_SECONDS = 5
 STALE_THRESHOLD_SECONDS = 15
 
 logger = logging.getLogger(__name__)
+
+
+def build_clob_ws_url():
+    return CLOB_MARKET_WS_URL
 
 
 @dataclass
@@ -232,7 +236,7 @@ class PolymarketWebsocketLogger:
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
 
     async def _subscribe_clob(self, ws):
-        payload = {"type": "market", "asset_ids": self._asset_ids}
+        payload = {"type": "market", "assets_ids": self._asset_ids}
         print(f"CLOB subscribe: {json.dumps(payload)}")
         await ws.send(json.dumps(payload))
 
