@@ -144,13 +144,30 @@ def _normalize_trade_side(value):
     return str(value).lower()
 
 
+def _coerce_asset_id(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            try:
+                return int(stripped)
+            except ValueError:
+                return stripped
+        return stripped
+    return value
+
+
 class PolymarketWebsocketLogger:
     def __init__(self, market_info, on_price_update, clob_ping_interval=CLOB_PING_SECONDS):
         self.market_info = market_info
         self.on_price_update = on_price_update
         self._clob_ping_interval = clob_ping_interval
         self._asset_ids = [
-            str(token_id) for token_id in market_info.get("clob_token_ids", [])
+            _coerce_asset_id(token_id)
+            for token_id in market_info.get("clob_token_ids", [])
         ]
         self.token_id_to_outcome = {
             str(token_id): outcome
