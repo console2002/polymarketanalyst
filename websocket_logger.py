@@ -145,19 +145,17 @@ def _normalize_trade_side(value):
 
 
 def _coerce_asset_id(value):
-    if isinstance(value, bool):
+    if value is None:
         return value
+    if isinstance(value, bool):
+        return str(int(value))
     if isinstance(value, (int, float)):
-        return int(value)
+        if isinstance(value, float) and not value.is_integer():
+            return str(value)
+        return str(int(value))
     if isinstance(value, str):
-        stripped = value.strip()
-        if stripped.isdigit():
-            try:
-                return int(stripped)
-            except ValueError:
-                return stripped
-        return stripped
-    return value
+        return value.strip()
+    return str(value)
 
 
 class PolymarketWebsocketLogger:
