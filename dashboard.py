@@ -774,6 +774,7 @@ def render_dashboard():
 
         if should_recalculate_strike_rate:
             closed_outcomes = []
+            entry_prices = []
             full_target_dt_order = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
             full_target_dt_indices = {target: idx for idx, target in enumerate(full_target_dt_order)}
             full_last_target_dt_index = len(full_target_dt_order) - 1
@@ -792,6 +793,7 @@ def render_dashboard():
                     return None
 
                 expected_side = None
+                cross_value = None
                 if not eligible.empty:
                     up_cross_index = find_crossing(eligible['UpPrice'])
                     down_cross_index = find_crossing(eligible['DownPrice'])
@@ -801,7 +803,7 @@ def render_dashboard():
                     if down_cross_index is not None:
                         candidates.append(("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, 'DownPrice']))
                     if candidates:
-                        expected_side, _, _ = min(candidates, key=lambda item: item[1])
+                        expected_side, _, cross_value = min(candidates, key=lambda item: item[1])
 
                 market_end_time = market_open + pd.Timedelta(minutes=15)
                 market_close_time = market_group[time_column].iloc[-1]
@@ -821,17 +823,33 @@ def render_dashboard():
                     else:
                         outcome = "Win" if final_down > final_up else "Lose"
                     closed_outcomes.append(outcome)
+                    if cross_value is not None and not pd.isna(cross_value):
+                        entry_prices.append(cross_value)
 
             recent_outcomes = closed_outcomes[-100:]
             total_count = min(100, len(recent_outcomes))
             wins = sum(1 for outcome in recent_outcomes if outcome == "Win")
             st.session_state.strike_rate = (wins / total_count * 100) if total_count else np.nan
+            # Keep entry price averages aligned to the same closed-market population used for strike rate.
+            recent_entry_prices = entry_prices[-100:]
+            if recent_entry_prices:
+                avg_entry_price = sum(recent_entry_prices) / len(recent_entry_prices)
+                gain = 1 - avg_entry_price
+                loss = 1.0
+                win_rate_needed = loss / (gain + loss)
+                st.session_state.avg_entry_price = avg_entry_price
+                st.session_state.win_rate_needed = win_rate_needed * 100
+            else:
+                st.session_state.avg_entry_price = np.nan
+                st.session_state.win_rate_needed = np.nan
             st.session_state.last_market_open = current_open
             st.session_state.strike_rate_source_date = resolved_date
             st.session_state.last_minutes_after_open = minutes_after_open
             st.session_state.last_entry_threshold = entry_threshold
 
         strike_rate = st.session_state.strike_rate
+        avg_entry_price = st.session_state.get("avg_entry_price", np.nan)
+        win_rate_needed = st.session_state.get("win_rate_needed", np.nan)
 
         chart_col, gauge_col = st.columns([4, 1])
         with chart_col:
@@ -871,6 +889,10 @@ def render_dashboard():
                 margin=dict(l=10, r=10, t=60, b=10),
             )
             st.plotly_chart(gauge_fig, width='stretch', config={'displayModeBar': False})
+            average_entry_display = f"{avg_entry_price:.2f}" if not pd.isna(avg_entry_price) else "N/A"
+            win_rate_display = f"{win_rate_needed:.2f}%" if not pd.isna(win_rate_needed) else "N/A"
+            st.metric("Average Entry", average_entry_display)
+            st.metric("Win Rate Needed", win_rate_display)
 
         summary_rows = []
         if total_markets:
