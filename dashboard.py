@@ -172,30 +172,53 @@ def _reshape_new_style_csv(df):
     return wide
 
 
+def _load_data_file(data_file):
+    df = pd.read_csv(data_file)
+    if "timestamp_et" in df.columns:
+        df = _reshape_new_style_csv(df)
+    else:
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"], format=TIME_FORMAT, errors="coerce")
+        if "Timestamp_UK" in df.columns:
+            df["Timestamp_UK"] = pd.to_datetime(df["Timestamp_UK"], format=TIME_FORMAT, errors="coerce")
+    for column in ("UpPrice", "DownPrice"):
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+    for column in ("UpVol", "DownVol"):
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
+    return df
+
+
 def load_data(selected_date, files_by_date, legacy_path):
     try:
         data_file, resolved_date = _resolve_data_file(selected_date, files_by_date, legacy_path)
         if not data_file:
             return None, None
-        df = pd.read_csv(data_file)
-        if "timestamp_et" in df.columns:
-            df = _reshape_new_style_csv(df)
-        else:
-            df["Timestamp"] = pd.to_datetime(df["Timestamp"], format=TIME_FORMAT, errors="coerce")
-            if "Timestamp_UK" in df.columns:
-                df["Timestamp_UK"] = pd.to_datetime(df["Timestamp_UK"], format=TIME_FORMAT, errors="coerce")
-        for column in ("UpPrice", "DownPrice"):
-            if column in df.columns:
-                df[column] = pd.to_numeric(df[column], errors="coerce")
-        for column in ("UpVol", "DownVol"):
-            if column in df.columns:
-                df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
+        df = _load_data_file(data_file)
         return df, resolved_date
     except FileNotFoundError:
         return None, None
     except Exception as e:  # Catch other potential errors during loading/parsing
         st.error(f"Error loading data: {e}")
         return None, None
+
+
+def load_all_data(files_by_date, legacy_path):
+    data_frames = []
+    for _, data_file in sorted(files_by_date.items()):
+        try:
+            df = _load_data_file(data_file)
+        except FileNotFoundError:
+            continue
+        data_frames.append(df)
+    if legacy_path:
+        try:
+            data_frames.append(_load_data_file(legacy_path))
+        except FileNotFoundError:
+            pass
+    if not data_frames:
+        return None
+    return pd.concat(data_frames, ignore_index=True)
 
 # Top-row controls
 files_by_date, legacy_path = _get_available_data_files()
@@ -380,8 +403,104 @@ def _calculate_strike_rate_metrics(df, time_column, minutes_after_open, entry_th
         win_rate_needed = np.nan
     return strike_rate, avg_entry_price, win_rate_needed, total_count
 
+
+def _calculate_window_summary(df, time_column, minutes_after_open, entry_threshold):
+    minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
+    probability_threshold = float(entry_threshold)
+    summary_rows = []
+    loss_targets = []
+    summary_target_dt_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
+    full_target_dt_indices = {target: idx for idx, target in enumerate(summary_target_dt_order)}
+    full_last_target_dt_index = len(summary_target_dt_order) - 1
+
+    def find_crossing(series):
+        above = series >= probability_threshold
+        crossings = above & ~above.shift(fill_value=False)
+        if crossings.any():
+            return crossings[crossings].index[0]
+        return None
+
+    for target_time in summary_target_dt_order:
+        market_group = df[df["TargetTime_dt"] == target_time].sort_values(time_column)
+        if market_group.empty:
+            continue
+        market_open = _align_market_open(market_group[time_column].min())
+        eligible = market_group[market_group[time_column] >= market_open + minutes_threshold].copy()
+
+        expected_side = None
+        cross_time = None
+        cross_value = None
+        if not eligible.empty:
+            up_cross_index = find_crossing(eligible["UpPrice"])
+            down_cross_index = find_crossing(eligible["DownPrice"])
+            candidates = []
+            if up_cross_index is not None:
+                candidates.append(
+                    ("Up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, "UpPrice"])
+                )
+            if down_cross_index is not None:
+                candidates.append(
+                    ("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, "DownPrice"])
+                )
+            if candidates:
+                expected_side, cross_time, cross_value = min(candidates, key=lambda item: item[1])
+
+        market_end_time = market_open + pd.Timedelta(minutes=15)
+        market_close_time = market_group[time_column].iloc[-1]
+        final_up, final_down = _get_close_prices(market_group, time_column)
+
+        outcome = "Pending"
+        full_index = full_target_dt_indices.get(target_time)
+        market_closed = (
+            (full_index is not None and full_index < full_last_target_dt_index)
+            or market_close_time >= market_end_time
+        )
+        if market_closed and expected_side:
+            if pd.isna(final_up) or pd.isna(final_down):
+                outcome = "N/A"
+            elif final_up == final_down:
+                outcome = "Tie"
+            elif expected_side == "Up":
+                outcome = "Win" if final_up > final_down else "Lose"
+            elif expected_side == "Down":
+                outcome = "Win" if final_down > final_up else "Lose"
+
+        if outcome == "Lose":
+            total_liq_series = market_group["UpVol"] + market_group["DownVol"]
+            up_price_series = market_group["UpPrice"].replace(0, np.nan)
+            summary_rows.append(
+                {
+                    "TargetTime": market_group["TargetTime"].iloc[0],
+                    "Market Open": market_open,
+                    "First Crossing Side": expected_side or "None",
+                    "Crossing Time": cross_time,
+                    "Crossing Price": cross_value,
+                    "Final UpPrice": final_up,
+                    "Final DownPrice": final_down,
+                    "Win/Lose": outcome,
+                    "Mean Total Liquidity": total_liq_series.mean(),
+                    "Max Total Liquidity": total_liq_series.max(),
+                    "Max UpPrice": up_price_series.max(),
+                    "Min UpPrice": up_price_series.min(),
+                }
+            )
+            loss_targets.append(target_time)
+
+    latest_loss_target = max(loss_targets) if loss_targets else None
+    return summary_rows, latest_loss_target
+
+
+def _find_latest_loss_target(df, time_column, minutes_after_open, entry_threshold):
+    _, latest_loss_target = _calculate_window_summary(
+        df, time_column, minutes_after_open, entry_threshold
+    )
+    return latest_loss_target
+
 def render_dashboard():
     df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
+    history_df = load_all_data(files_by_date, legacy_path)
+    if history_df is None or history_df.empty:
+        history_df = df
     if selected_date and resolved_date and selected_date != resolved_date:
         st.info(
             f"No data file found for {selected_date.strftime('%Y-%m-%d')}. "
@@ -396,6 +515,14 @@ def render_dashboard():
 
         df = df.sort_values(time_column)
         df['TargetTime_dt'] = pd.to_datetime(df['TargetTime'], format=TIME_FORMAT, errors='coerce')
+        if history_df is not None and not history_df.empty:
+            history_time_column = time_column if time_column in history_df.columns else "Timestamp"
+            history_df = history_df.sort_values(history_time_column)
+            history_df["TargetTime_dt"] = pd.to_datetime(
+                history_df["TargetTime"], format=TIME_FORMAT, errors="coerce"
+            )
+        else:
+            history_time_column = time_column
 
         if 'window_offset' not in st.session_state:
             st.session_state.window_offset = 0
@@ -503,13 +630,18 @@ def render_dashboard():
         )
 
         latest_timestamp = df_window[time_column].max()
-        current_open = _align_market_open(latest_timestamp)
+        history_latest_timestamp = (
+            history_df[history_time_column].max()
+            if history_df is not None and not history_df.empty
+            else latest_timestamp
+        )
+        current_open = _align_market_open(history_latest_timestamp)
         if "last_market_open" not in st.session_state:
             st.session_state.last_market_open = pd.NaT
         if "strike_rate" not in st.session_state:
             st.session_state.strike_rate = np.nan
-        if "strike_rate_source_date" not in st.session_state:
-            st.session_state.strike_rate_source_date = resolved_date
+        if "strike_rate_initialized" not in st.session_state:
+            st.session_state.strike_rate_initialized = False
         if "last_minutes_after_open" not in st.session_state:
             st.session_state.last_minutes_after_open = minutes_after_open
         if "last_entry_threshold" not in st.session_state:
@@ -834,11 +966,9 @@ def render_dashboard():
         fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
         probability_threshold = float(entry_threshold)
         minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
-        should_recalculate_strike_rate = False
+        should_recalculate_strike_rate = not st.session_state.strike_rate_initialized
         last_market_open = st.session_state.last_market_open
-        if resolved_date != st.session_state.strike_rate_source_date:
-            should_recalculate_strike_rate = True
-        elif pd.isna(current_open):
+        if pd.isna(current_open):
             should_recalculate_strike_rate = False
         elif pd.isna(last_market_open):
             should_recalculate_strike_rate = True
@@ -856,8 +986,8 @@ def render_dashboard():
 
         if should_recalculate_strike_rate:
             strike_rate, avg_entry_price, win_rate_needed, _ = _calculate_strike_rate_metrics(
-                df,
-                time_column,
+                history_df,
+                history_time_column,
                 minutes_after_open,
                 entry_threshold,
             )
@@ -865,7 +995,7 @@ def render_dashboard():
             st.session_state.avg_entry_price = avg_entry_price
             st.session_state.win_rate_needed = win_rate_needed
             st.session_state.last_market_open = current_open
-            st.session_state.strike_rate_source_date = resolved_date
+            st.session_state.strike_rate_initialized = True
             st.session_state.last_minutes_after_open = minutes_after_open
             st.session_state.last_entry_threshold = entry_threshold
 
@@ -930,8 +1060,8 @@ def render_dashboard():
 
                 with status_container:
                     best_result = run_autotune(
-                        df,
-                        time_column,
+                        history_df,
+                        history_time_column,
                         _calculate_strike_rate_metrics,
                         progress_callback=_progress_callback,
                     )
@@ -960,92 +1090,56 @@ def render_dashboard():
             st.session_state.window_summary_minutes_after_open = minutes_after_open
         if "window_summary_entry_threshold" not in st.session_state:
             st.session_state.window_summary_entry_threshold = entry_threshold
+        if "window_summary_rows" not in st.session_state:
+            st.session_state.window_summary_rows = []
+        if "window_summary_last_updated" not in st.session_state:
+            st.session_state.window_summary_last_updated = pd.NaT
+        if "window_summary_last_loss_target" not in st.session_state:
+            st.session_state.window_summary_last_loss_target = None
 
-        summary_minutes_threshold = pd.Timedelta(
-            minutes=int(st.session_state.window_summary_minutes_after_open)
+        minutes_after_open_changed = (
+            minutes_after_open != st.session_state.window_summary_minutes_after_open
         )
-        summary_probability_threshold = float(
-            st.session_state.window_summary_entry_threshold
+        entry_threshold_changed = (
+            entry_threshold != st.session_state.window_summary_entry_threshold
+        )
+        recalculate_window_summary = (
+            minutes_after_open_changed
+            or entry_threshold_changed
+            or not st.session_state.window_summary_rows
         )
 
-        summary_rows = []
-        summary_target_dt_order = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
-        target_order = summary_target_dt_order
-        full_target_dt_indices = {target: idx for idx, target in enumerate(summary_target_dt_order)}
-        full_last_target_dt_index = len(summary_target_dt_order) - 1
-
-        for idx, target_time in enumerate(target_order):
-            market_group = df[df['TargetTime_dt'] == target_time].sort_values(time_column)
-            if market_group.empty:
-                continue
-            market_open = _align_market_open(market_group[time_column].min())
-            eligible = market_group[
-                market_group[time_column] >= market_open + summary_minutes_threshold
-            ].copy()
-
-            def find_crossing(series):
-                above = series >= summary_probability_threshold
-                crossings = above & ~above.shift(fill_value=False)
-                if crossings.any():
-                    return crossings[crossings].index[0]
-                return None
-
-            expected_side = None
-            cross_time = None
-            cross_value = None
-            if not eligible.empty:
-                up_cross_index = find_crossing(eligible['UpPrice'])
-                down_cross_index = find_crossing(eligible['DownPrice'])
-                candidates = []
-                if up_cross_index is not None:
-                    candidates.append(("Up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, 'UpPrice']))
-                if down_cross_index is not None:
-                    candidates.append(("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, 'DownPrice']))
-                if candidates:
-                    expected_side, cross_time, cross_value = min(candidates, key=lambda item: item[1])
-
-            market_end_time = market_open + pd.Timedelta(minutes=15)
-            market_close_time = market_group[time_column].iloc[-1]
-            final_up, final_down = _get_close_prices(market_group, time_column)
-
-            outcome = "Pending"
-            full_index = full_target_dt_indices.get(target_time)
-            market_closed = (
-                (full_index is not None and full_index < full_last_target_dt_index)
-                or market_close_time >= market_end_time
+        if not recalculate_window_summary and history_df is not None and not history_df.empty:
+            latest_loss_target = _find_latest_loss_target(
+                history_df,
+                history_time_column,
+                minutes_after_open,
+                entry_threshold,
             )
-            if market_closed and expected_side:
-                if pd.isna(final_up) or pd.isna(final_down):
-                    outcome = "N/A"
-                elif final_up == final_down:
-                    outcome = "Tie"
-                elif expected_side == "Up":
-                    outcome = "Win" if final_up > final_down else "Lose"
-                elif expected_side == "Down":
-                    outcome = "Win" if final_down > final_up else "Lose"
+            if latest_loss_target is not None:
+                last_loss_target = st.session_state.window_summary_last_loss_target
+                new_loss_seen = last_loss_target is None or latest_loss_target > last_loss_target
+                if new_loss_seen:
+                    last_updated = st.session_state.window_summary_last_updated
+                    now = pd.Timestamp.utcnow()
+                    if pd.isna(last_updated) or now - last_updated >= pd.Timedelta(minutes=15):
+                        recalculate_window_summary = True
 
-            if outcome == "Lose":
-                total_liq_series = market_group['UpVol'] + market_group['DownVol']
-                up_price_series = market_group['UpPrice'].replace(0, np.nan)
-                summary_rows.append(
-                    {
-                        "TargetTime": market_group['TargetTime'].iloc[0],
-                        "Market Open": market_open,
-                        "First Crossing Side": expected_side or "None",
-                        "Crossing Time": cross_time,
-                        "Crossing Price": cross_value,
-                        "Final UpPrice": final_up,
-                        "Final DownPrice": final_down,
-                        "Win/Lose": outcome,
-                        "Mean Total Liquidity": total_liq_series.mean(),
-                        "Max Total Liquidity": total_liq_series.max(),
-                        "Max UpPrice": up_price_series.max(),
-                        "Min UpPrice": up_price_series.min(),
-                    }
-                )
+        if recalculate_window_summary and history_df is not None and not history_df.empty:
+            summary_rows, latest_loss_target = _calculate_window_summary(
+                history_df,
+                history_time_column,
+                minutes_after_open,
+                entry_threshold,
+            )
+            st.session_state.window_summary_rows = summary_rows
+            st.session_state.window_summary_last_loss_target = latest_loss_target
+            st.session_state.window_summary_last_updated = pd.Timestamp.utcnow()
+            st.session_state.window_summary_minutes_after_open = minutes_after_open
+            st.session_state.window_summary_entry_threshold = entry_threshold
 
         with st.expander("Window summary"):
-            summary_df = pd.DataFrame(summary_rows)
+            summary_df = pd.DataFrame(st.session_state.window_summary_rows)
             st.dataframe(summary_df, width='stretch')
 
         st.caption(f"Last updated: {latest['Timestamp']}")
