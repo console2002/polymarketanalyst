@@ -217,7 +217,7 @@ class PolymarketWebsocketLogger:
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
 
     async def _subscribe_clob(self, ws):
-        payload = {"type": "market", "assets_ids": self._asset_ids}
+        payload = {"type": "market", "asset_ids": self._asset_ids}
         print(f"CLOB subscribe: {json.dumps(payload)}")
         await ws.send(json.dumps(payload))
 
