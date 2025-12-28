@@ -809,6 +809,12 @@ def render_dashboard():
             st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
         with gauge_col:
             gauge_value = 0 if pd.isna(strike_rate) else strike_rate
+            gauge_value = max(0, min(100, gauge_value))
+            green_end = gauge_value
+            red_start = gauge_value
+            if gauge_value >= 100:
+                green_end = 100
+                red_start = 100
             gauge_fig = go.Figure(
                 go.Indicator(
                     mode="gauge+number",
@@ -820,8 +826,8 @@ def render_dashboard():
                         "axis": {"range": [0, 100]},
                         "bar": {"color": "rgba(0, 0, 0, 0)"},
                         "steps": [
-                            {"range": [0, 50], "color": "green"},
-                            {"range": [50, 100], "color": "red"},
+                            {"range": [0, green_end], "color": "green"},
+                            {"range": [red_start, 100], "color": "red"},
                         ],
                         "threshold": {
                             "line": {"color": "black", "width": 3},
