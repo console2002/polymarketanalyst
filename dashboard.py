@@ -872,8 +872,8 @@ def render_dashboard():
                         "axis": {"range": [0, 100]},
                         "bar": {"color": "rgba(0, 0, 0, 0)"},
                         "steps": [
-                            {"range": [0, green_end], "color": "green"},
-                            {"range": [red_start, 100], "color": "red"},
+                            {"range": [0, green_end], "color": "red"},
+                            {"range": [red_start, 100], "color": "green"},
                         ],
                         "threshold": {
                             "line": {"color": "black", "width": 3},
