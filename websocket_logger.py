@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 import pytz
 import websockets
 
-CLOB_MARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com"
+CLOB_WSS_BASE = "wss://ws-subscriptions-clob.polymarket.com"
+CLOB_MARKET_WS_URL = f"{CLOB_WSS_BASE}/ws/market"
 CLOB_PING_SECONDS = 10
 MAX_BACKOFF_SECONDS = 5
 STALE_THRESHOLD_SECONDS = 15
@@ -229,9 +230,19 @@ class PolymarketWebsocketLogger:
                     )
                     self._shutdown.set()
                     return
+                logger.warning(
+                    "CLOB websocket handshake failed (status %s): %s",
+                    exc.status_code,
+                    exc,
+                )
                 await asyncio.sleep(self._next_backoff(backoff))
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "CLOB websocket connection failed (%s): %s",
+                    type(exc).__name__,
+                    exc,
+                )
                 await asyncio.sleep(self._next_backoff(backoff))
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
 

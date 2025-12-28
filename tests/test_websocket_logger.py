@@ -14,7 +14,7 @@ def _sample_market_info():
 def test_build_clob_ws_url():
     assert (
         websocket_logger.build_clob_ws_url()
-        == "wss://ws-subscriptions-clob.polymarket.com"
+        == "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     )
 
 
@@ -72,3 +72,28 @@ def test_clob_keepalive_sends_ping():
 
     asyncio.run(run())
     assert "PING" in ws.sent
+
+
+def test_subscribe_payload_uses_assets_ids_and_market_type():
+    class FakeWebSocket:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, payload):
+            self.sent.append(payload)
+
+    async def on_price_update(payload):
+        return payload
+
+    logger = websocket_logger.PolymarketWebsocketLogger(
+        _sample_market_info(), on_price_update
+    )
+    ws = FakeWebSocket()
+
+    async def run():
+        await logger._subscribe_clob(ws)
+
+    asyncio.run(run())
+    assert len(ws.sent) == 1
+    payload = json.loads(ws.sent[0])
+    assert payload == {"assets_ids": ["1", "2"], "type": "market"}
