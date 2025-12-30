@@ -327,11 +327,28 @@ def _get_close_prices(market_group, time_column, close_window_points=6):
     return close_up, close_down
 
 
-def _calculate_strike_rate_metrics(df, time_column, minutes_after_open, entry_threshold):
+def _split_trade_records(trade_records):
+    total_trades = len(trade_records)
+    if total_trades >= 2000:
+        autotune_records = trade_records[:1000]
+        strike_records = trade_records[1000:2000]
+    else:
+        split_point = total_trades // 2
+        autotune_records = trade_records[:split_point]
+        strike_records = trade_records[split_point:]
+    return autotune_records, strike_records
+
+
+def _calculate_strike_rate_metrics(
+    df,
+    time_column,
+    minutes_after_open,
+    entry_threshold,
+    history_segment="strike",
+):
     minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
     probability_threshold = float(entry_threshold)
-    closed_outcomes = []
-    entry_prices = []
+    trade_records = []
     full_target_dt_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
     full_target_dt_indices = {target: idx for idx, target in enumerate(full_target_dt_order)}
     full_last_target_dt_index = len(full_target_dt_order) - 1
@@ -384,17 +401,27 @@ def _calculate_strike_rate_metrics(df, time_column, minutes_after_open, entry_th
                 outcome = "Win" if final_up > final_down else "Lose"
             else:
                 outcome = "Win" if final_down > final_up else "Lose"
-            closed_outcomes.append(outcome)
-            if cross_value is not None and not pd.isna(cross_value):
-                entry_prices.append(cross_value)
+            trade_records.append(
+                {
+                    "outcome": outcome,
+                    "entry_price": None if cross_value is None or pd.isna(cross_value) else cross_value,
+                }
+            )
 
-    recent_outcomes = closed_outcomes[-100:]
-    total_count = min(100, len(recent_outcomes))
-    wins = sum(1 for outcome in recent_outcomes if outcome == "Win")
+    autotune_records, strike_records = _split_trade_records(trade_records)
+    if history_segment == "autotune":
+        segment_records = autotune_records
+    else:
+        segment_records = strike_records
+
+    total_count = len(segment_records)
+    wins = sum(1 for record in segment_records if record["outcome"] == "Win")
     strike_rate = (wins / total_count * 100) if total_count else np.nan
-    recent_entry_prices = entry_prices[-100:]
-    if recent_entry_prices:
-        avg_entry_price = sum(recent_entry_prices) / len(recent_entry_prices)
+    entry_prices = [
+        record["entry_price"] for record in segment_records if record["entry_price"] is not None
+    ]
+    if entry_prices:
+        avg_entry_price = sum(entry_prices) / len(entry_prices)
         gain = 1 - avg_entry_price
         loss = 1.0
         win_rate_needed = loss / (gain + loss) * 100
@@ -650,6 +677,10 @@ def render_dashboard():
             st.session_state.autotune_result = None
         if "autotune_message" not in st.session_state:
             st.session_state.autotune_message = None
+        if "strike_sample_size" not in st.session_state:
+            st.session_state.strike_sample_size = None
+        if "autotune_sample_size" not in st.session_state:
+            st.session_state.autotune_sample_size = None
 
         latest_up_vol = latest.get("UpVol")
         latest_down_vol = latest.get("DownVol")
@@ -985,15 +1016,25 @@ def render_dashboard():
             should_recalculate_strike_rate = True
 
         if should_recalculate_strike_rate:
-            strike_rate, avg_entry_price, win_rate_needed, _ = _calculate_strike_rate_metrics(
+            strike_rate, avg_entry_price, win_rate_needed, strike_sample_size = _calculate_strike_rate_metrics(
                 history_df,
                 history_time_column,
                 minutes_after_open,
                 entry_threshold,
+                history_segment="strike",
+            )
+            _, _, _, autotune_sample_size = _calculate_strike_rate_metrics(
+                history_df,
+                history_time_column,
+                minutes_after_open,
+                entry_threshold,
+                history_segment="autotune",
             )
             st.session_state.strike_rate = strike_rate
             st.session_state.avg_entry_price = avg_entry_price
             st.session_state.win_rate_needed = win_rate_needed
+            st.session_state.strike_sample_size = strike_sample_size
+            st.session_state.autotune_sample_size = autotune_sample_size
             st.session_state.last_market_open = current_open
             st.session_state.strike_rate_initialized = True
             st.session_state.last_minutes_after_open = minutes_after_open
@@ -1002,6 +1043,8 @@ def render_dashboard():
         strike_rate = st.session_state.strike_rate
         avg_entry_price = st.session_state.get("avg_entry_price", np.nan)
         win_rate_needed = st.session_state.get("win_rate_needed", np.nan)
+        strike_sample_size = st.session_state.get("strike_sample_size")
+        autotune_sample_size = st.session_state.get("autotune_sample_size")
 
         chart_col, gauge_col = st.columns([4, 1])
         with chart_col:
@@ -1042,6 +1085,10 @@ def render_dashboard():
             st.plotly_chart(gauge_fig, width='stretch', config={'displayModeBar': False})
             average_entry_display = f"{avg_entry_price:.2f}" if not pd.isna(avg_entry_price) else "N/A"
             win_rate_display = f"{win_rate_needed:.2f}%" if not pd.isna(win_rate_needed) else "N/A"
+            if strike_sample_size is not None and autotune_sample_size is not None:
+                st.caption(
+                    f"Samples: autotune={autotune_sample_size}, strike rate={strike_sample_size}"
+                )
             metrics_col1, metrics_col2 = st.columns(2)
             with metrics_col1:
                 st.metric("Average Entry", average_entry_display)
@@ -1059,10 +1106,19 @@ def render_dashboard():
                     status_container.write(message)
 
                 with status_container:
+                    def _autotune_metrics(df, column, minutes, threshold):
+                        return _calculate_strike_rate_metrics(
+                            df,
+                            column,
+                            minutes,
+                            threshold,
+                            history_segment="autotune",
+                        )
+
                     best_result = run_autotune(
                         history_df,
                         history_time_column,
-                        _calculate_strike_rate_metrics,
+                        _autotune_metrics,
                         progress_callback=_progress_callback,
                     )
                 progress_container.empty()
