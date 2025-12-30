@@ -388,13 +388,11 @@ def _calculate_strike_rate_metrics(df, time_column, minutes_after_open, entry_th
             if cross_value is not None and not pd.isna(cross_value):
                 entry_prices.append(cross_value)
 
-    recent_outcomes = closed_outcomes[-100:]
-    total_count = min(100, len(recent_outcomes))
-    wins = sum(1 for outcome in recent_outcomes if outcome == "Win")
+    total_count = len(closed_outcomes)
+    wins = sum(1 for outcome in closed_outcomes if outcome == "Win")
     strike_rate = (wins / total_count * 100) if total_count else np.nan
-    recent_entry_prices = entry_prices[-100:]
-    if recent_entry_prices:
-        avg_entry_price = sum(recent_entry_prices) / len(recent_entry_prices)
+    if entry_prices:
+        avg_entry_price = sum(entry_prices) / len(entry_prices)
         gain = 1 - avg_entry_price
         loss = 1.0
         win_rate_needed = loss / (gain + loss) * 100
