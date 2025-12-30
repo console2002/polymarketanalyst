@@ -1094,14 +1094,16 @@ def render_dashboard():
                 st.caption(
                     f"Samples: autotune={autotune_sample_size}, strike rate={strike_sample_size}"
                 )
-            metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
-            with metrics_col1:
+            metrics_container = st.container()
+            with metrics_container:
                 st.metric("Average Entry", average_entry_display)
-                autotune_clicked = st.button("Autotune", key="autotune_button")
-            with metrics_col2:
                 st.metric("Win Rate Needed", win_rate_display)
-            with metrics_col3:
                 st.metric("Edge", edge_display)
+            autotune_clicked = st.button(
+                "Autotune",
+                key="autotune_button",
+                use_container_width=True,
+            )
             if autotune_clicked:
                 progress_container = st.empty()
                 status_container = st.status("Autotuning…", expanded=True)
