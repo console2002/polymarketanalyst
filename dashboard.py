@@ -1085,16 +1085,23 @@ def render_dashboard():
             st.plotly_chart(gauge_fig, width='stretch', config={'displayModeBar': False})
             average_entry_display = f"{avg_entry_price:.2f}" if not pd.isna(avg_entry_price) else "N/A"
             win_rate_display = f"{win_rate_needed:.2f}%" if not pd.isna(win_rate_needed) else "N/A"
+            if not pd.isna(strike_rate) and not pd.isna(win_rate_needed):
+                edge_value = strike_rate - win_rate_needed
+                edge_display = f"{edge_value:+.2f}%"
+            else:
+                edge_display = "N/A"
             if strike_sample_size is not None and autotune_sample_size is not None:
                 st.caption(
                     f"Samples: autotune={autotune_sample_size}, strike rate={strike_sample_size}"
                 )
-            metrics_col1, metrics_col2 = st.columns(2)
+            metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
             with metrics_col1:
                 st.metric("Average Entry", average_entry_display)
                 autotune_clicked = st.button("Autotune", key="autotune_button")
             with metrics_col2:
                 st.metric("Win Rate Needed", win_rate_display)
+            with metrics_col3:
+                st.metric("Edge", edge_display)
             if autotune_clicked:
                 progress_container = st.empty()
                 status_container = st.status("Autotuning…", expanded=True)
