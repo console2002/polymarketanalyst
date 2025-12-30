@@ -330,8 +330,9 @@ def _get_close_prices(market_group, time_column, close_window_points=6):
 def _split_trade_records(trade_records):
     total_trades = len(trade_records)
     if total_trades >= 2000:
-        autotune_records = trade_records[:1000]
-        strike_records = trade_records[1000:2000]
+        windowed_records = trade_records[-2000:]
+        autotune_records = windowed_records[:1000]
+        strike_records = windowed_records[1000:]
     else:
         split_point = total_trades // 2
         autotune_records = trade_records[:split_point]
