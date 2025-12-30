@@ -1050,10 +1050,10 @@ def render_dashboard():
         with chart_col:
             st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
         with gauge_col:
-            gauge_value = 0 if pd.isna(strike_rate) else strike_rate
-            gauge_value = max(0, min(100, gauge_value))
-            win_rate_needed_pct = 0 if pd.isna(win_rate_needed) else win_rate_needed
-            win_rate_needed_pct = max(0, min(100, win_rate_needed_pct))
+            gauge_value = 50 if pd.isna(strike_rate) else strike_rate
+            gauge_value = max(50, min(100, gauge_value))
+            win_rate_needed_pct = 50 if pd.isna(win_rate_needed) else win_rate_needed
+            win_rate_needed_pct = max(50, min(100, win_rate_needed_pct))
             green_end = win_rate_needed_pct
             red_start = win_rate_needed_pct
             gauge_fig = go.Figure(
@@ -1064,10 +1064,10 @@ def render_dashboard():
                     title={"text": "Strike Rate"},
                     gauge={
                         "shape": "angular",
-                        "axis": {"range": [0, 100]},
+                        "axis": {"range": [50, 100]},
                         "bar": {"color": "rgba(0, 0, 0, 0)"},
                         "steps": [
-                            {"range": [0, green_end], "color": "red"},
+                            {"range": [50, green_end], "color": "red"},
                             {"range": [red_start, 100], "color": "green"},
                         ],
                         "threshold": {
