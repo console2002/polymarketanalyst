@@ -328,13 +328,13 @@ def _get_close_prices(market_group, time_column, close_window_points=6):
 
 
 def _split_trade_records(trade_records):
-    total_trades = len(trade_records)
-    if total_trades >= 2000:
+    total_records = len(trade_records)
+    if total_records >= 2000:
         windowed_records = trade_records[-2000:]
         autotune_records = windowed_records[:1000]
         strike_records = windowed_records[1000:]
     else:
-        split_point = total_trades // 2
+        split_point = total_records // 2
         autotune_records = trade_records[:split_point]
         strike_records = trade_records[split_point:]
     return autotune_records, strike_records
@@ -349,8 +349,8 @@ def _calculate_strike_rate_metrics(
 ):
     minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
     probability_threshold = float(entry_threshold)
-    trade_records = []
-    full_target_dt_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
+    market_records = []
+    full_target_dt_order = sorted(df["TargetTime_dt"].dropna().unique())
     full_target_dt_indices = {target: idx for idx, target in enumerate(full_target_dt_order)}
     full_last_target_dt_index = len(full_target_dt_order) - 1
 
@@ -392,35 +392,41 @@ def _calculate_strike_rate_metrics(
             (full_index is not None and full_index < full_last_target_dt_index)
             or market_close_time >= market_end_time
         )
-        if market_closed and expected_side:
-            final_up, final_down = _get_close_prices(market_group, time_column)
-            if pd.isna(final_up) or pd.isna(final_down):
-                continue
-            if final_up == final_down:
-                outcome = "Tie"
-            elif expected_side == "Up":
-                outcome = "Win" if final_up > final_down else "Lose"
-            else:
-                outcome = "Win" if final_down > final_up else "Lose"
-            trade_records.append(
+        if market_closed:
+            outcome = None
+            entry_price = None
+            if expected_side:
+                final_up, final_down = _get_close_prices(market_group, time_column)
+                if pd.notna(final_up) and pd.notna(final_down):
+                    if final_up == final_down:
+                        outcome = "Tie"
+                    elif expected_side == "Up":
+                        outcome = "Win" if final_up > final_down else "Lose"
+                    else:
+                        outcome = "Win" if final_down > final_up else "Lose"
+                    if cross_value is not None and not pd.isna(cross_value):
+                        entry_price = cross_value
+            market_records.append(
                 {
                     "outcome": outcome,
-                    "entry_price": None if cross_value is None or pd.isna(cross_value) else cross_value,
+                    "entry_price": entry_price,
                 }
             )
 
-    autotune_records, strike_records = _split_trade_records(trade_records)
+    autotune_records, strike_records = _split_trade_records(market_records)
     if history_segment == "autotune":
         segment_records = autotune_records
     else:
         segment_records = strike_records
 
     total_count = len(segment_records)
-    wins = sum(1 for record in segment_records if record["outcome"] == "Win")
-    strike_rate = (wins / total_count * 100) if total_count else np.nan
-    entry_prices = [
-        record["entry_price"] for record in segment_records if record["entry_price"] is not None
+    trade_records = [
+        record for record in segment_records if record["outcome"] in {"Win", "Lose", "Tie"}
     ]
+    trade_count = len(trade_records)
+    wins = sum(1 for record in trade_records if record["outcome"] == "Win")
+    strike_rate = (wins / trade_count * 100) if trade_count else np.nan
+    entry_prices = [record["entry_price"] for record in trade_records if record["entry_price"] is not None]
     if entry_prices:
         avg_entry_price = sum(entry_prices) / len(entry_prices)
         gain = 1 - avg_entry_price
