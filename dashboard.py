@@ -584,6 +584,178 @@ def _find_latest_loss_target(
     )
     return latest_loss_target
 
+
+def _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold):
+    if "last_market_open" not in st.session_state:
+        st.session_state.last_market_open = pd.NaT
+    if "strike_rate" not in st.session_state:
+        st.session_state.strike_rate = np.nan
+    if "strike_rate_initialized" not in st.session_state:
+        st.session_state.strike_rate_initialized = False
+    if "last_minutes_after_open" not in st.session_state:
+        st.session_state.last_minutes_after_open = minutes_after_open
+    if "last_entry_threshold" not in st.session_state:
+        st.session_state.last_entry_threshold = entry_threshold
+    if "last_hold_until_close_threshold" not in st.session_state:
+        st.session_state.last_hold_until_close_threshold = hold_until_close_threshold
+    if "autotune_result" not in st.session_state:
+        st.session_state.autotune_result = None
+    if "autotune_message" not in st.session_state:
+        st.session_state.autotune_message = None
+    if "strike_sample_size" not in st.session_state:
+        st.session_state.strike_sample_size = None
+    if "autotune_sample_size" not in st.session_state:
+        st.session_state.autotune_sample_size = None
+
+
+def _should_recalculate_strike_rate(
+    current_open,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+):
+    should_recalculate = not st.session_state.strike_rate_initialized
+    last_market_open = st.session_state.last_market_open
+    if pd.isna(current_open):
+        return False
+    if pd.isna(last_market_open):
+        should_recalculate = True
+    else:
+        should_recalculate = current_open > last_market_open
+
+    minutes_after_open_changed = (
+        minutes_after_open != st.session_state.last_minutes_after_open
+    )
+    entry_threshold_changed = (
+        entry_threshold != st.session_state.last_entry_threshold
+    )
+    hold_until_close_threshold_changed = (
+        hold_until_close_threshold != st.session_state.last_hold_until_close_threshold
+    )
+    if (
+        minutes_after_open_changed
+        or entry_threshold_changed
+        or hold_until_close_threshold_changed
+    ):
+        should_recalculate = True
+    return should_recalculate
+
+
+def _update_strike_rate_state(
+    history_df,
+    history_time_column,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    current_open,
+):
+    _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
+    should_recalculate = _should_recalculate_strike_rate(
+        current_open,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+    )
+    if should_recalculate:
+        strike_rate, avg_entry_price, win_rate_needed, strike_sample_size = _calculate_strike_rate_metrics(
+            history_df,
+            history_time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+            history_segment="strike",
+        )
+        _, _, _, autotune_sample_size = _calculate_strike_rate_metrics(
+            history_df,
+            history_time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+            history_segment="autotune",
+        )
+        st.session_state.strike_rate = strike_rate
+        st.session_state.avg_entry_price = avg_entry_price
+        st.session_state.win_rate_needed = win_rate_needed
+        st.session_state.strike_sample_size = strike_sample_size
+        st.session_state.autotune_sample_size = autotune_sample_size
+        st.session_state.last_market_open = current_open
+        st.session_state.strike_rate_initialized = True
+        st.session_state.last_minutes_after_open = minutes_after_open
+        st.session_state.last_entry_threshold = entry_threshold
+        st.session_state.last_hold_until_close_threshold = hold_until_close_threshold
+
+
+def _initialize_window_summary_state(minutes_after_open, entry_threshold, hold_until_close_threshold):
+    if "window_summary_minutes_after_open" not in st.session_state:
+        st.session_state.window_summary_minutes_after_open = minutes_after_open
+    if "window_summary_entry_threshold" not in st.session_state:
+        st.session_state.window_summary_entry_threshold = entry_threshold
+    if "window_summary_hold_until_close_threshold" not in st.session_state:
+        st.session_state.window_summary_hold_until_close_threshold = hold_until_close_threshold
+    if "window_summary_rows" not in st.session_state:
+        st.session_state.window_summary_rows = []
+    if "window_summary_last_updated" not in st.session_state:
+        st.session_state.window_summary_last_updated = pd.NaT
+    if "window_summary_last_loss_target" not in st.session_state:
+        st.session_state.window_summary_last_loss_target = None
+
+
+def _update_window_summary_state(
+    history_df,
+    history_time_column,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+):
+    _initialize_window_summary_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
+    minutes_after_open_changed = (
+        minutes_after_open != st.session_state.window_summary_minutes_after_open
+    )
+    entry_threshold_changed = (
+        entry_threshold != st.session_state.window_summary_entry_threshold
+    )
+    hold_until_close_threshold_changed = (
+        hold_until_close_threshold != st.session_state.window_summary_hold_until_close_threshold
+    )
+    recalculate_window_summary = (
+        minutes_after_open_changed
+        or entry_threshold_changed
+        or hold_until_close_threshold_changed
+        or not st.session_state.window_summary_rows
+    )
+
+    if not recalculate_window_summary and history_df is not None and not history_df.empty:
+        latest_loss_target = _find_latest_loss_target(
+            history_df,
+            history_time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+        )
+        if latest_loss_target is not None:
+            last_loss_target = st.session_state.window_summary_last_loss_target
+            new_loss_seen = last_loss_target is None or latest_loss_target > last_loss_target
+            if new_loss_seen:
+                last_updated = st.session_state.window_summary_last_updated
+                now = pd.Timestamp.utcnow()
+                if pd.isna(last_updated) or now - last_updated >= pd.Timedelta(minutes=15):
+                    recalculate_window_summary = True
+
+    if recalculate_window_summary and history_df is not None and not history_df.empty:
+        summary_rows, latest_loss_target = _calculate_window_summary(
+            history_df,
+            history_time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+        )
+        st.session_state.window_summary_rows = summary_rows
+        st.session_state.window_summary_last_loss_target = latest_loss_target
+        st.session_state.window_summary_last_updated = pd.Timestamp.utcnow()
+        st.session_state.window_summary_minutes_after_open = minutes_after_open
+        st.session_state.window_summary_entry_threshold = entry_threshold
+        st.session_state.window_summary_hold_until_close_threshold = hold_until_close_threshold
+
 def render_dashboard():
     df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
     history_df = load_all_data(files_by_date, legacy_path)
@@ -724,26 +896,7 @@ def render_dashboard():
             else latest_timestamp
         )
         current_open = _align_market_open(history_latest_timestamp)
-        if "last_market_open" not in st.session_state:
-            st.session_state.last_market_open = pd.NaT
-        if "strike_rate" not in st.session_state:
-            st.session_state.strike_rate = np.nan
-        if "strike_rate_initialized" not in st.session_state:
-            st.session_state.strike_rate_initialized = False
-        if "last_minutes_after_open" not in st.session_state:
-            st.session_state.last_minutes_after_open = minutes_after_open
-        if "last_entry_threshold" not in st.session_state:
-            st.session_state.last_entry_threshold = entry_threshold
-        if "last_hold_until_close_threshold" not in st.session_state:
-            st.session_state.last_hold_until_close_threshold = hold_until_close_threshold
-        if "autotune_result" not in st.session_state:
-            st.session_state.autotune_result = None
-        if "autotune_message" not in st.session_state:
-            st.session_state.autotune_message = None
-        if "strike_sample_size" not in st.session_state:
-            st.session_state.strike_sample_size = None
-        if "autotune_sample_size" not in st.session_state:
-            st.session_state.autotune_sample_size = None
+        _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
 
         latest_up_vol = latest.get("UpVol")
         latest_down_vol = latest.get("DownVol")
@@ -1085,58 +1238,14 @@ def render_dashboard():
         fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
         probability_threshold = float(entry_threshold)
         minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
-        should_recalculate_strike_rate = not st.session_state.strike_rate_initialized
-        last_market_open = st.session_state.last_market_open
-        if pd.isna(current_open):
-            should_recalculate_strike_rate = False
-        elif pd.isna(last_market_open):
-            should_recalculate_strike_rate = True
-        else:
-            should_recalculate_strike_rate = current_open > last_market_open
-
-        minutes_after_open_changed = (
-            minutes_after_open != st.session_state.last_minutes_after_open
+        _update_strike_rate_state(
+            history_df,
+            history_time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+            current_open,
         )
-        entry_threshold_changed = (
-            entry_threshold != st.session_state.last_entry_threshold
-        )
-        hold_until_close_threshold_changed = (
-            hold_until_close_threshold != st.session_state.last_hold_until_close_threshold
-        )
-        if (
-            minutes_after_open_changed
-            or entry_threshold_changed
-            or hold_until_close_threshold_changed
-        ) and not pd.isna(current_open):
-            should_recalculate_strike_rate = True
-
-        if should_recalculate_strike_rate:
-            strike_rate, avg_entry_price, win_rate_needed, strike_sample_size = _calculate_strike_rate_metrics(
-                history_df,
-                history_time_column,
-                minutes_after_open,
-                entry_threshold,
-                hold_until_close_threshold,
-                history_segment="strike",
-            )
-            _, _, _, autotune_sample_size = _calculate_strike_rate_metrics(
-                history_df,
-                history_time_column,
-                minutes_after_open,
-                entry_threshold,
-                hold_until_close_threshold,
-                history_segment="autotune",
-            )
-            st.session_state.strike_rate = strike_rate
-            st.session_state.avg_entry_price = avg_entry_price
-            st.session_state.win_rate_needed = win_rate_needed
-            st.session_state.strike_sample_size = strike_sample_size
-            st.session_state.autotune_sample_size = autotune_sample_size
-            st.session_state.last_market_open = current_open
-            st.session_state.strike_rate_initialized = True
-            st.session_state.last_minutes_after_open = minutes_after_open
-            st.session_state.last_entry_threshold = entry_threshold
-            st.session_state.last_hold_until_close_threshold = hold_until_close_threshold
 
         strike_rate = st.session_state.strike_rate
         avg_entry_price = st.session_state.get("avg_entry_price", np.nan)
@@ -1239,78 +1348,25 @@ def render_dashboard():
                     st.session_state.autotune_message = "No viable data for autotune"
             if st.session_state.autotune_result:
                 result = st.session_state.autotune_result
-                    st.caption(
-                        "Best: "
-                        f"minutes_after_open={result['minutes_after_open']}, "
-                        f"entry_threshold={result['entry_threshold']:.2f}, "
-                        f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
-                        f"strike_rate={result['strike_rate']:.2f}%, "
-                        f"win_rate_needed={result['win_rate_needed']:.2f}%, "
-                        f"edge={result['edge']:.2f}%"
-                    )
+                st.caption(
+                    "Best: "
+                    f"minutes_after_open={result['minutes_after_open']}, "
+                    f"entry_threshold={result['entry_threshold']:.2f}, "
+                    f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
+                    f"strike_rate={result['strike_rate']:.2f}%, "
+                    f"win_rate_needed={result['win_rate_needed']:.2f}%, "
+                    f"edge={result['edge']:.2f}%"
+                )
             elif st.session_state.autotune_message:
                 st.caption(st.session_state.autotune_message)
 
-        if "window_summary_minutes_after_open" not in st.session_state:
-            st.session_state.window_summary_minutes_after_open = minutes_after_open
-        if "window_summary_entry_threshold" not in st.session_state:
-            st.session_state.window_summary_entry_threshold = entry_threshold
-        if "window_summary_hold_until_close_threshold" not in st.session_state:
-            st.session_state.window_summary_hold_until_close_threshold = hold_until_close_threshold
-        if "window_summary_rows" not in st.session_state:
-            st.session_state.window_summary_rows = []
-        if "window_summary_last_updated" not in st.session_state:
-            st.session_state.window_summary_last_updated = pd.NaT
-        if "window_summary_last_loss_target" not in st.session_state:
-            st.session_state.window_summary_last_loss_target = None
-
-        minutes_after_open_changed = (
-            minutes_after_open != st.session_state.window_summary_minutes_after_open
+        _update_window_summary_state(
+            history_df,
+            history_time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
         )
-        entry_threshold_changed = (
-            entry_threshold != st.session_state.window_summary_entry_threshold
-        )
-        hold_until_close_threshold_changed = (
-            hold_until_close_threshold != st.session_state.window_summary_hold_until_close_threshold
-        )
-        recalculate_window_summary = (
-            minutes_after_open_changed
-            or entry_threshold_changed
-            or hold_until_close_threshold_changed
-            or not st.session_state.window_summary_rows
-        )
-
-        if not recalculate_window_summary and history_df is not None and not history_df.empty:
-            latest_loss_target = _find_latest_loss_target(
-                history_df,
-                history_time_column,
-                minutes_after_open,
-                entry_threshold,
-                hold_until_close_threshold,
-            )
-            if latest_loss_target is not None:
-                last_loss_target = st.session_state.window_summary_last_loss_target
-                new_loss_seen = last_loss_target is None or latest_loss_target > last_loss_target
-                if new_loss_seen:
-                    last_updated = st.session_state.window_summary_last_updated
-                    now = pd.Timestamp.utcnow()
-                    if pd.isna(last_updated) or now - last_updated >= pd.Timedelta(minutes=15):
-                        recalculate_window_summary = True
-
-        if recalculate_window_summary and history_df is not None and not history_df.empty:
-            summary_rows, latest_loss_target = _calculate_window_summary(
-                history_df,
-                history_time_column,
-                minutes_after_open,
-                entry_threshold,
-                hold_until_close_threshold,
-            )
-            st.session_state.window_summary_rows = summary_rows
-            st.session_state.window_summary_last_loss_target = latest_loss_target
-            st.session_state.window_summary_last_updated = pd.Timestamp.utcnow()
-            st.session_state.window_summary_minutes_after_open = minutes_after_open
-            st.session_state.window_summary_entry_threshold = entry_threshold
-            st.session_state.window_summary_hold_until_close_threshold = hold_until_close_threshold
 
         with st.expander("Window summary"):
             summary_df = pd.DataFrame(st.session_state.window_summary_rows)
