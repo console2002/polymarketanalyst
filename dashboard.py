@@ -1213,13 +1213,13 @@ def render_dashboard():
                     status_container.write(message)
 
                 with status_container:
-                    def _autotune_metrics(df, column, minutes, threshold):
+                    def _autotune_metrics(df, column, minutes, threshold, hold_threshold):
                         return _calculate_strike_rate_metrics(
                             df,
                             column,
                             minutes,
                             threshold,
-                            hold_until_close_threshold,
+                            hold_threshold,
                             history_segment="autotune",
                         )
 
@@ -1239,14 +1239,15 @@ def render_dashboard():
                     st.session_state.autotune_message = "No viable data for autotune"
             if st.session_state.autotune_result:
                 result = st.session_state.autotune_result
-                st.caption(
-                    "Best: "
-                    f"minutes_after_open={result['minutes_after_open']}, "
-                    f"entry_threshold={result['entry_threshold']:.2f}, "
-                    f"strike_rate={result['strike_rate']:.2f}%, "
-                    f"win_rate_needed={result['win_rate_needed']:.2f}%, "
-                    f"edge={result['edge']:.2f}%"
-                )
+                    st.caption(
+                        "Best: "
+                        f"minutes_after_open={result['minutes_after_open']}, "
+                        f"entry_threshold={result['entry_threshold']:.2f}, "
+                        f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
+                        f"strike_rate={result['strike_rate']:.2f}%, "
+                        f"win_rate_needed={result['win_rate_needed']:.2f}%, "
+                        f"edge={result['edge']:.2f}%"
+                    )
             elif st.session_state.autotune_message:
                 st.caption(st.session_state.autotune_message)
 
