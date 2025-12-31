@@ -335,6 +335,138 @@ def _get_close_prices(market_group, time_column, close_window_points=6):
     return close_up, close_down
 
 
+def _find_threshold_crossing(series, threshold):
+    above = series >= threshold
+    crossings = above & ~above.shift(fill_value=False)
+    if crossings.any():
+        return crossings[crossings].index[0]
+    return None
+
+
+def _calculate_market_trade_records(
+    df,
+    time_column,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    target_order=None,
+):
+    if df is None or df.empty:
+        return []
+
+    df = df.copy()
+    if "TargetTime_dt" not in df.columns:
+        df["TargetTime_dt"] = pd.to_datetime(df["TargetTime"], format=TIME_FORMAT, errors="coerce")
+
+    minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
+    probability_threshold = float(entry_threshold)
+    hold_threshold = float(hold_until_close_threshold)
+
+    if target_order is None:
+        target_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
+
+    target_indices = {target: idx for idx, target in enumerate(target_order)}
+    last_index = len(target_order) - 1
+    records = []
+
+    for target_time in target_order:
+        market_group = df[df["TargetTime_dt"] == target_time].sort_values(time_column)
+        if market_group.empty:
+            continue
+
+        market_open = _align_market_open(market_group[time_column].min())
+        open_threshold_time = market_open + minutes_threshold
+        eligible = market_group[market_group[time_column] >= open_threshold_time].copy()
+
+        expected_side = None
+        entry_time = None
+        entry_price = None
+        if not eligible.empty:
+            up_cross_index = _find_threshold_crossing(eligible["UpPrice"], probability_threshold)
+            down_cross_index = _find_threshold_crossing(eligible["DownPrice"], probability_threshold)
+            candidates = []
+            if up_cross_index is not None:
+                candidates.append(
+                    ("Up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, "UpPrice"])
+                )
+            if down_cross_index is not None:
+                candidates.append(
+                    ("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, "DownPrice"])
+                )
+            if candidates:
+                expected_side, entry_time, entry_price = min(candidates, key=lambda item: item[1])
+
+        market_end_time = market_open + pd.Timedelta(minutes=15)
+        market_close_time = market_group[time_column].iloc[-1]
+        target_index = target_indices.get(target_time)
+        market_closed = (
+            (target_index is not None and target_index < last_index)
+            or market_close_time >= market_end_time
+        )
+
+        close_up, close_down = _get_close_prices(market_group, time_column)
+        exit_time = None
+        exit_price = None
+        exit_reason = None
+        if expected_side and entry_price is not None and not pd.isna(entry_price):
+            if entry_price >= hold_threshold:
+                exit_time = market_close_time
+                exit_reason = "held_to_close"
+            else:
+                side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
+                eligible_after_entry = eligible[eligible[time_column] >= entry_time]
+                exit_cross_index = _find_threshold_crossing(eligible_after_entry[side_column], hold_threshold)
+                if exit_cross_index is not None:
+                    exit_time = eligible_after_entry.loc[exit_cross_index, time_column]
+                    exit_price = eligible_after_entry.loc[exit_cross_index, side_column]
+                    exit_reason = "threshold"
+                else:
+                    exit_time = market_close_time
+                    exit_reason = "held_to_close"
+
+            if exit_time == market_close_time:
+                exit_price = close_up if expected_side == "Up" else close_down
+
+        outcome = None
+        if market_closed:
+            if expected_side:
+                if exit_reason == "threshold":
+                    outcome = "Win"
+                else:
+                    if pd.isna(close_up) or pd.isna(close_down):
+                        outcome = "N/A"
+                    elif close_up == close_down:
+                        outcome = "Tie"
+                    elif expected_side == "Up":
+                        outcome = "Win" if close_up > close_down else "Lose"
+                    else:
+                        outcome = "Win" if close_down > close_up else "Lose"
+        else:
+            outcome = "Pending"
+
+        records.append(
+            {
+                "target_time_dt": target_time,
+                "target_time": market_group["TargetTime"].iloc[0] if "TargetTime" in market_group.columns else None,
+                "market_open": market_open,
+                "open_threshold_time": open_threshold_time,
+                "market_close_time": market_close_time,
+                "expected_side": expected_side,
+                "entry_time": entry_time,
+                "entry_price": entry_price,
+                "exit_time": exit_time,
+                "exit_price": exit_price,
+                "exit_reason": exit_reason,
+                "outcome": outcome,
+                "close_up": close_up,
+                "close_down": close_down,
+                "market_closed": market_closed,
+            }
+        )
+
+    return records
+
+
 def _split_trade_records(trade_records):
     total_records = len(trade_records)
     if total_records >= 2000:
@@ -356,104 +488,22 @@ def _calculate_strike_rate_metrics(
     hold_until_close_threshold,
     history_segment="strike",
 ):
-    minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
-    probability_threshold = float(entry_threshold)
-    hold_threshold = float(hold_until_close_threshold)
-    market_records = []
-    full_target_dt_order = sorted(df["TargetTime_dt"].dropna().unique())
-    full_target_dt_indices = {target: idx for idx, target in enumerate(full_target_dt_order)}
-    full_last_target_dt_index = len(full_target_dt_order) - 1
+    trade_records = _calculate_market_trade_records(
+        df,
+        time_column,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+    )
 
-    def find_crossing(series, threshold):
-        above = series >= threshold
-        crossings = above & ~above.shift(fill_value=False)
-        if crossings.any():
-            return crossings[crossings].index[0]
-        return None
-
-    for target_time in full_target_dt_order:
-        market_group = df[df["TargetTime_dt"] == target_time].sort_values(time_column)
-        if market_group.empty:
-            continue
-        market_open = _align_market_open(market_group[time_column].min())
-        eligible = market_group[market_group[time_column] >= market_open + minutes_threshold].copy()
-
-        expected_side = None
-        cross_time = None
-        cross_value = None
-        if not eligible.empty:
-            up_cross_index = find_crossing(eligible["UpPrice"], probability_threshold)
-            down_cross_index = find_crossing(eligible["DownPrice"], probability_threshold)
-            candidates = []
-            if up_cross_index is not None:
-                candidates.append(
-                    ("Up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, "UpPrice"])
-                )
-            if down_cross_index is not None:
-                candidates.append(
-                    ("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, "DownPrice"])
-                )
-            if candidates:
-                expected_side, cross_time, cross_value = min(candidates, key=lambda item: item[1])
-
-        market_end_time = market_open + pd.Timedelta(minutes=15)
-        market_close_time = market_group[time_column].iloc[-1]
-        full_index = full_target_dt_indices.get(target_time)
-        market_closed = (
-            (full_index is not None and full_index < full_last_target_dt_index)
-            or market_close_time >= market_end_time
-        )
-        if market_closed:
-            outcome = None
-            entry_price = None
-            exit_time = None
-            exit_price = None
-            if expected_side and cross_value is not None and not pd.isna(cross_value):
-                entry_price = cross_value
-                if entry_price >= hold_threshold:
-                    exit_time = market_close_time
-                else:
-                    side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
-                    eligible_after_entry = eligible[eligible[time_column] >= cross_time]
-                    exit_cross_index = find_crossing(eligible_after_entry[side_column], hold_threshold)
-                    if exit_cross_index is not None:
-                        exit_time = eligible_after_entry.loc[exit_cross_index, time_column]
-                        exit_price = eligible_after_entry.loc[exit_cross_index, side_column]
-                    else:
-                        exit_time = market_close_time
-
-                if exit_time == market_close_time:
-                    close_up, close_down = _get_close_prices(market_group, time_column)
-                    exit_price = close_up if expected_side == "Up" else close_down
-
-            if expected_side:
-                final_up, final_down = _get_close_prices(market_group, time_column)
-                if pd.notna(final_up) and pd.notna(final_down):
-                    if final_up == final_down:
-                        outcome = "Tie"
-                    elif expected_side == "Up":
-                        outcome = "Win" if final_up > final_down else "Lose"
-                    else:
-                        outcome = "Win" if final_down > final_up else "Lose"
-            market_records.append(
-                {
-                    "outcome": outcome,
-                    "entry_price": entry_price,
-                    "exit_price": exit_price,
-                    "exit_time": exit_time,
-                }
-            )
-
-    autotune_records, strike_records = _split_trade_records(market_records)
+    autotune_records, strike_records = _split_trade_records(trade_records)
     if history_segment == "autotune":
         segment_records = autotune_records
     else:
         segment_records = strike_records
 
     total_count = len(segment_records)
-    trade_records = [
-        record for record in segment_records if record["outcome"] in {"Win", "Lose", "Tie"}
-    ]
+    trade_records = [record for record in segment_records if record["outcome"] in {"Win", "Lose", "Tie"}]
     trade_count = len(trade_records)
     wins = sum(1 for record in trade_records if record["outcome"] == "Win")
     strike_rate = (wins / trade_count * 100) if trade_count else np.nan
@@ -476,100 +526,36 @@ def _calculate_window_summary(
     entry_threshold,
     hold_until_close_threshold,
 ):
-    minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
-    probability_threshold = float(entry_threshold)
-    hold_threshold = float(hold_until_close_threshold)
     summary_rows = []
     loss_targets = []
-    summary_target_dt_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
-    full_target_dt_indices = {target: idx for idx, target in enumerate(summary_target_dt_order)}
-    full_last_target_dt_index = len(summary_target_dt_order) - 1
+    trade_records = _calculate_market_trade_records(
+        df,
+        time_column,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+    )
 
-    def find_crossing(series, threshold):
-        above = series >= threshold
-        crossings = above & ~above.shift(fill_value=False)
-        if crossings.any():
-            return crossings[crossings].index[0]
-        return None
-
-    for target_time in summary_target_dt_order:
-        market_group = df[df["TargetTime_dt"] == target_time].sort_values(time_column)
-        if market_group.empty:
-            continue
-        market_open = _align_market_open(market_group[time_column].min())
-        eligible = market_group[market_group[time_column] >= market_open + minutes_threshold].copy()
-
-        expected_side = None
-        cross_time = None
-        cross_value = None
-        if not eligible.empty:
-            up_cross_index = find_crossing(eligible["UpPrice"], probability_threshold)
-            down_cross_index = find_crossing(eligible["DownPrice"], probability_threshold)
-            candidates = []
-            if up_cross_index is not None:
-                candidates.append(
-                    ("Up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, "UpPrice"])
-                )
-            if down_cross_index is not None:
-                candidates.append(
-                    ("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, "DownPrice"])
-                )
-            if candidates:
-                expected_side, cross_time, cross_value = min(candidates, key=lambda item: item[1])
-
-        market_end_time = market_open + pd.Timedelta(minutes=15)
-        market_close_time = market_group[time_column].iloc[-1]
-        final_up, final_down = _get_close_prices(market_group, time_column)
-
-        outcome = "Pending"
-        exit_time = None
-        exit_price = None
-        if expected_side and cross_value is not None and not pd.isna(cross_value):
-            if cross_value >= hold_threshold:
-                exit_time = market_close_time
-            else:
-                side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
-                eligible_after_entry = eligible[eligible[time_column] >= cross_time]
-                exit_cross_index = find_crossing(eligible_after_entry[side_column], hold_threshold)
-                if exit_cross_index is not None:
-                    exit_time = eligible_after_entry.loc[exit_cross_index, time_column]
-                    exit_price = eligible_after_entry.loc[exit_cross_index, side_column]
-                else:
-                    exit_time = market_close_time
-
-            if exit_time == market_close_time:
-                exit_price = final_up if expected_side == "Up" else final_down
-
-        full_index = full_target_dt_indices.get(target_time)
-        market_closed = (
-            (full_index is not None and full_index < full_last_target_dt_index)
-            or market_close_time >= market_end_time
-        )
-        if market_closed and expected_side:
-            if pd.isna(final_up) or pd.isna(final_down):
-                outcome = "N/A"
-            elif final_up == final_down:
-                outcome = "Tie"
-            elif expected_side == "Up":
-                outcome = "Win" if final_up > final_down else "Lose"
-            elif expected_side == "Down":
-                outcome = "Win" if final_down > final_up else "Lose"
-
-        if outcome == "Lose":
+    for record in trade_records:
+        if record["outcome"] == "Lose":
+            target_time = record["target_time_dt"]
+            market_group = df[df["TargetTime_dt"] == target_time].sort_values(time_column)
+            if market_group.empty:
+                continue
             total_liq_series = market_group["UpVol"] + market_group["DownVol"]
             up_price_series = market_group["UpPrice"].replace(0, np.nan)
             summary_rows.append(
                 {
                     "TargetTime": market_group["TargetTime"].iloc[0],
-                    "Market Open": market_open,
-                    "First Crossing Side": expected_side or "None",
-                    "Crossing Time": cross_time,
-                    "Crossing Price": cross_value,
-                    "Exit Time": exit_time,
-                    "Exit Price": exit_price,
-                    "Final UpPrice": final_up,
-                    "Final DownPrice": final_down,
-                    "Win/Lose": outcome,
+                    "Market Open": record["market_open"],
+                    "First Crossing Side": record["expected_side"] or "None",
+                    "Crossing Time": record["entry_time"],
+                    "Crossing Price": record["entry_price"],
+                    "Exit Time": record["exit_time"],
+                    "Exit Price": record["exit_price"],
+                    "Final UpPrice": record["close_up"],
+                    "Final DownPrice": record["close_down"],
+                    "Win/Lose": record["outcome"],
                     "Mean Total Liquidity": total_liq_series.mean(),
                     "Max Total Liquidity": total_liq_series.max(),
                     "Max UpPrice": up_price_series.max(),
@@ -952,85 +938,64 @@ def render_dashboard():
             secondary_y=True,
         )
 
-        minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
-        probability_threshold = float(entry_threshold)
-        expected_winner_traces = []
-        ordered_targets = df_window['TargetTime'].drop_duplicates().tolist()
-        full_target_order = df['TargetTime'].drop_duplicates().tolist()
-        full_target_indices = {target: idx for idx, target in enumerate(full_target_order)}
-        full_last_target_index = len(full_target_order) - 1
+        ordered_targets = df_window["TargetTime_dt"].dropna().drop_duplicates().tolist()
+        full_target_dt_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
+        trade_records = _calculate_market_trade_records(
+            df_window,
+            time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+            target_order=full_target_dt_order,
+        )
+        trade_record_map = {record["target_time_dt"]: record for record in trade_records}
+        entry_times = []
+        entry_prices = []
+        exit_times = []
+        exit_prices = []
+        held_times = []
+        held_prices = []
 
-        for idx, target_time in enumerate(ordered_targets):
-            market_group = df_window[df_window['TargetTime'] == target_time].sort_values(time_column)
+        for target_time in ordered_targets:
+            market_group = df_window[df_window["TargetTime_dt"] == target_time].sort_values(time_column)
             if market_group.empty:
                 continue
-            market_open = _align_market_open(market_group[time_column].min())
-            open_threshold_time = market_open + minutes_threshold
-
-            add_vline_all_rows(
-                fig,
-                open_threshold_time,
-                line_width=1,
-                line_dash="solid",
-                line_color="rgba(200, 200, 200, 0.4)",
-            )
-
-            eligible = market_group[market_group[time_column] >= open_threshold_time].copy()
-            if eligible.empty:
+            record = trade_record_map.get(target_time)
+            if record is None:
                 continue
-
-            def find_crossing(series):
-                above = series >= probability_threshold
-                crossings = above & ~above.shift(fill_value=False)
-                if crossings.any():
-                    return crossings[crossings].index[0]
-                return None
-
-            up_cross_index = find_crossing(eligible['UpPrice'])
-            down_cross_index = find_crossing(eligible['DownPrice'])
-            candidates = []
-            if up_cross_index is not None:
-                candidates.append(("up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, 'UpPrice']))
-            if down_cross_index is not None:
-                candidates.append(("down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, 'DownPrice']))
-
-            if candidates:
-                expected_side, cross_time, cross_value = min(candidates, key=lambda item: item[1])
-                expected_winner_traces.append(
-                    go.Scatter(
-                        x=[cross_time],
-                        y=[cross_value],
-                        mode='markers+text',
-                        marker=dict(color='#1E90FF', size=9),
-                        text=["expected winner"],
-                        textposition='top center',
-                        textfont=dict(size=10, color='#1E90FF'),
-                        showlegend=False,
-                    )
+            open_threshold_time = record["open_threshold_time"]
+            if pd.notna(open_threshold_time):
+                add_vline_all_rows(
+                    fig,
+                    open_threshold_time,
+                    line_width=1,
+                    line_dash="solid",
+                    line_color="rgba(200, 200, 200, 0.4)",
                 )
-                market_end_time = market_open + pd.Timedelta(minutes=15)
-                market_close_time = market_group[time_column].iloc[-1]
-                full_index = full_target_indices.get(target_time)
-                market_closed = (
-                    (full_index is not None and full_index < full_last_target_index)
-                    or market_close_time >= market_end_time
-                )
-                if not market_closed:
-                    continue
-                final_up, final_down = _get_close_prices(market_group, time_column)
-                if pd.isna(final_up) or pd.isna(final_down):
-                    continue
-                if final_up == final_down:
-                    outcome_text = "Tie"
-                    outcome_color = "#808080"
-                elif expected_side == "up":
-                    outcome_text = "Win" if final_up > final_down else "Lose"
-                    outcome_color = "#00AA00" if outcome_text == "Win" else "#FF0000"
+
+            if record["entry_time"] is not None and record["entry_price"] is not None:
+                entry_times.append(record["entry_time"])
+                entry_prices.append(record["entry_price"])
+
+            if record["exit_time"] is not None and record["exit_price"] is not None:
+                if record["exit_reason"] == "threshold":
+                    exit_times.append(record["exit_time"])
+                    exit_prices.append(record["exit_price"])
+                elif record["exit_reason"] == "held_to_close":
+                    held_times.append(record["exit_time"])
+                    held_prices.append(record["exit_price"])
+
+            if record["outcome"] in {"Win", "Lose", "Tie"}:
+                if record["exit_reason"] == "threshold":
+                    outcome_text = f"{record['outcome']} (exit)"
                 else:
-                    outcome_text = "Win" if final_down > final_up else "Lose"
-                    outcome_color = "#00AA00" if outcome_text == "Win" else "#FF0000"
+                    outcome_text = f"{record['outcome']} (close)"
+
+                outcome_color = "#808080" if record["outcome"] == "Tie" else (
+                    "#00AA00" if record["outcome"] == "Win" else "#FF0000"
+                )
                 fig.add_annotation(
-                    x=market_close_time,
+                    x=record["exit_time"] or record["market_close_time"],
                     y=1.03,
                     text=outcome_text,
                     showarrow=False,
@@ -1039,8 +1004,54 @@ def render_dashboard():
                     col=1,
                 )
 
-        for trace in expected_winner_traces:
-            fig.add_trace(trace, row=1, col=1)
+        if entry_times:
+            fig.add_trace(
+                go.Scatter(
+                    x=entry_times,
+                    y=entry_prices,
+                    mode="markers+text",
+                    marker=dict(color="#1E90FF", size=9),
+                    text=["entry"] * len(entry_times),
+                    textposition="top center",
+                    textfont=dict(size=10, color="#1E90FF"),
+                    name="Entry",
+                    showlegend=False,
+                ),
+                row=1,
+                col=1,
+            )
+        if exit_times:
+            fig.add_trace(
+                go.Scatter(
+                    x=exit_times,
+                    y=exit_prices,
+                    mode="markers+text",
+                    marker=dict(color="#6A5ACD", size=9),
+                    text=["exit"] * len(exit_times),
+                    textposition="top center",
+                    textfont=dict(size=10, color="#6A5ACD"),
+                    name="Exit",
+                    showlegend=False,
+                ),
+                row=1,
+                col=1,
+            )
+        if held_times:
+            fig.add_trace(
+                go.Scatter(
+                    x=held_times,
+                    y=held_prices,
+                    mode="markers+text",
+                    marker=dict(color="#808080", size=9),
+                    text=["held to close"] * len(held_times),
+                    textposition="top center",
+                    textfont=dict(size=10, color="#808080"),
+                    name="Held to close",
+                    showlegend=False,
+                ),
+                row=1,
+                col=1,
+            )
 
         # Add vertical lines for market transitions to both plots
         # Identify where TargetTime changes
