@@ -90,6 +90,14 @@ entry_threshold = st.sidebar.number_input(
     step=0.01,
     format="%.2f",
 )
+hold_until_close_threshold = st.sidebar.number_input(
+    "Hold Until Close Threshold",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.80,
+    step=0.01,
+    format="%.2f",
+)
 resample_interval = st.sidebar.selectbox(
     "Resample interval",
     options=("1s", "5s", "15s", "30s", "60s", "all"),
@@ -345,17 +353,19 @@ def _calculate_strike_rate_metrics(
     time_column,
     minutes_after_open,
     entry_threshold,
+    hold_until_close_threshold,
     history_segment="strike",
 ):
     minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
     probability_threshold = float(entry_threshold)
+    hold_threshold = float(hold_until_close_threshold)
     market_records = []
     full_target_dt_order = sorted(df["TargetTime_dt"].dropna().unique())
     full_target_dt_indices = {target: idx for idx, target in enumerate(full_target_dt_order)}
     full_last_target_dt_index = len(full_target_dt_order) - 1
 
-    def find_crossing(series):
-        above = series >= probability_threshold
+    def find_crossing(series, threshold):
+        above = series >= threshold
         crossings = above & ~above.shift(fill_value=False)
         if crossings.any():
             return crossings[crossings].index[0]
@@ -369,10 +379,11 @@ def _calculate_strike_rate_metrics(
         eligible = market_group[market_group[time_column] >= market_open + minutes_threshold].copy()
 
         expected_side = None
+        cross_time = None
         cross_value = None
         if not eligible.empty:
-            up_cross_index = find_crossing(eligible["UpPrice"])
-            down_cross_index = find_crossing(eligible["DownPrice"])
+            up_cross_index = find_crossing(eligible["UpPrice"], probability_threshold)
+            down_cross_index = find_crossing(eligible["DownPrice"], probability_threshold)
             candidates = []
             if up_cross_index is not None:
                 candidates.append(
@@ -383,7 +394,7 @@ def _calculate_strike_rate_metrics(
                     ("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, "DownPrice"])
                 )
             if candidates:
-                expected_side, _, cross_value = min(candidates, key=lambda item: item[1])
+                expected_side, cross_time, cross_value = min(candidates, key=lambda item: item[1])
 
         market_end_time = market_open + pd.Timedelta(minutes=15)
         market_close_time = market_group[time_column].iloc[-1]
@@ -395,6 +406,26 @@ def _calculate_strike_rate_metrics(
         if market_closed:
             outcome = None
             entry_price = None
+            exit_time = None
+            exit_price = None
+            if expected_side and cross_value is not None and not pd.isna(cross_value):
+                entry_price = cross_value
+                if entry_price >= hold_threshold:
+                    exit_time = market_close_time
+                else:
+                    side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
+                    eligible_after_entry = eligible[eligible[time_column] >= cross_time]
+                    exit_cross_index = find_crossing(eligible_after_entry[side_column], hold_threshold)
+                    if exit_cross_index is not None:
+                        exit_time = eligible_after_entry.loc[exit_cross_index, time_column]
+                        exit_price = eligible_after_entry.loc[exit_cross_index, side_column]
+                    else:
+                        exit_time = market_close_time
+
+                if exit_time == market_close_time:
+                    close_up, close_down = _get_close_prices(market_group, time_column)
+                    exit_price = close_up if expected_side == "Up" else close_down
+
             if expected_side:
                 final_up, final_down = _get_close_prices(market_group, time_column)
                 if pd.notna(final_up) and pd.notna(final_down):
@@ -404,12 +435,12 @@ def _calculate_strike_rate_metrics(
                         outcome = "Win" if final_up > final_down else "Lose"
                     else:
                         outcome = "Win" if final_down > final_up else "Lose"
-                    if cross_value is not None and not pd.isna(cross_value):
-                        entry_price = cross_value
             market_records.append(
                 {
                     "outcome": outcome,
                     "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "exit_time": exit_time,
                 }
             )
 
@@ -438,17 +469,24 @@ def _calculate_strike_rate_metrics(
     return strike_rate, avg_entry_price, win_rate_needed, total_count
 
 
-def _calculate_window_summary(df, time_column, minutes_after_open, entry_threshold):
+def _calculate_window_summary(
+    df,
+    time_column,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+):
     minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
     probability_threshold = float(entry_threshold)
+    hold_threshold = float(hold_until_close_threshold)
     summary_rows = []
     loss_targets = []
     summary_target_dt_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
     full_target_dt_indices = {target: idx for idx, target in enumerate(summary_target_dt_order)}
     full_last_target_dt_index = len(summary_target_dt_order) - 1
 
-    def find_crossing(series):
-        above = series >= probability_threshold
+    def find_crossing(series, threshold):
+        above = series >= threshold
         crossings = above & ~above.shift(fill_value=False)
         if crossings.any():
             return crossings[crossings].index[0]
@@ -465,8 +503,8 @@ def _calculate_window_summary(df, time_column, minutes_after_open, entry_thresho
         cross_time = None
         cross_value = None
         if not eligible.empty:
-            up_cross_index = find_crossing(eligible["UpPrice"])
-            down_cross_index = find_crossing(eligible["DownPrice"])
+            up_cross_index = find_crossing(eligible["UpPrice"], probability_threshold)
+            down_cross_index = find_crossing(eligible["DownPrice"], probability_threshold)
             candidates = []
             if up_cross_index is not None:
                 candidates.append(
@@ -484,6 +522,24 @@ def _calculate_window_summary(df, time_column, minutes_after_open, entry_thresho
         final_up, final_down = _get_close_prices(market_group, time_column)
 
         outcome = "Pending"
+        exit_time = None
+        exit_price = None
+        if expected_side and cross_value is not None and not pd.isna(cross_value):
+            if cross_value >= hold_threshold:
+                exit_time = market_close_time
+            else:
+                side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
+                eligible_after_entry = eligible[eligible[time_column] >= cross_time]
+                exit_cross_index = find_crossing(eligible_after_entry[side_column], hold_threshold)
+                if exit_cross_index is not None:
+                    exit_time = eligible_after_entry.loc[exit_cross_index, time_column]
+                    exit_price = eligible_after_entry.loc[exit_cross_index, side_column]
+                else:
+                    exit_time = market_close_time
+
+            if exit_time == market_close_time:
+                exit_price = final_up if expected_side == "Up" else final_down
+
         full_index = full_target_dt_indices.get(target_time)
         market_closed = (
             (full_index is not None and full_index < full_last_target_dt_index)
@@ -509,6 +565,8 @@ def _calculate_window_summary(df, time_column, minutes_after_open, entry_thresho
                     "First Crossing Side": expected_side or "None",
                     "Crossing Time": cross_time,
                     "Crossing Price": cross_value,
+                    "Exit Time": exit_time,
+                    "Exit Price": exit_price,
                     "Final UpPrice": final_up,
                     "Final DownPrice": final_down,
                     "Win/Lose": outcome,
@@ -524,9 +582,19 @@ def _calculate_window_summary(df, time_column, minutes_after_open, entry_thresho
     return summary_rows, latest_loss_target
 
 
-def _find_latest_loss_target(df, time_column, minutes_after_open, entry_threshold):
+def _find_latest_loss_target(
+    df,
+    time_column,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+):
     _, latest_loss_target = _calculate_window_summary(
-        df, time_column, minutes_after_open, entry_threshold
+        df,
+        time_column,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
     )
     return latest_loss_target
 
@@ -680,6 +748,8 @@ def render_dashboard():
             st.session_state.last_minutes_after_open = minutes_after_open
         if "last_entry_threshold" not in st.session_state:
             st.session_state.last_entry_threshold = entry_threshold
+        if "last_hold_until_close_threshold" not in st.session_state:
+            st.session_state.last_hold_until_close_threshold = hold_until_close_threshold
         if "autotune_result" not in st.session_state:
             st.session_state.autotune_result = None
         if "autotune_message" not in st.session_state:
@@ -1019,7 +1089,14 @@ def render_dashboard():
         entry_threshold_changed = (
             entry_threshold != st.session_state.last_entry_threshold
         )
-        if (minutes_after_open_changed or entry_threshold_changed) and not pd.isna(current_open):
+        hold_until_close_threshold_changed = (
+            hold_until_close_threshold != st.session_state.last_hold_until_close_threshold
+        )
+        if (
+            minutes_after_open_changed
+            or entry_threshold_changed
+            or hold_until_close_threshold_changed
+        ) and not pd.isna(current_open):
             should_recalculate_strike_rate = True
 
         if should_recalculate_strike_rate:
@@ -1028,6 +1105,7 @@ def render_dashboard():
                 history_time_column,
                 minutes_after_open,
                 entry_threshold,
+                hold_until_close_threshold,
                 history_segment="strike",
             )
             _, _, _, autotune_sample_size = _calculate_strike_rate_metrics(
@@ -1035,6 +1113,7 @@ def render_dashboard():
                 history_time_column,
                 minutes_after_open,
                 entry_threshold,
+                hold_until_close_threshold,
                 history_segment="autotune",
             )
             st.session_state.strike_rate = strike_rate
@@ -1046,6 +1125,7 @@ def render_dashboard():
             st.session_state.strike_rate_initialized = True
             st.session_state.last_minutes_after_open = minutes_after_open
             st.session_state.last_entry_threshold = entry_threshold
+            st.session_state.last_hold_until_close_threshold = hold_until_close_threshold
 
         strike_rate = st.session_state.strike_rate
         avg_entry_price = st.session_state.get("avg_entry_price", np.nan)
@@ -1128,6 +1208,7 @@ def render_dashboard():
                             column,
                             minutes,
                             threshold,
+                            hold_until_close_threshold,
                             history_segment="autotune",
                         )
 
@@ -1162,6 +1243,8 @@ def render_dashboard():
             st.session_state.window_summary_minutes_after_open = minutes_after_open
         if "window_summary_entry_threshold" not in st.session_state:
             st.session_state.window_summary_entry_threshold = entry_threshold
+        if "window_summary_hold_until_close_threshold" not in st.session_state:
+            st.session_state.window_summary_hold_until_close_threshold = hold_until_close_threshold
         if "window_summary_rows" not in st.session_state:
             st.session_state.window_summary_rows = []
         if "window_summary_last_updated" not in st.session_state:
@@ -1175,9 +1258,13 @@ def render_dashboard():
         entry_threshold_changed = (
             entry_threshold != st.session_state.window_summary_entry_threshold
         )
+        hold_until_close_threshold_changed = (
+            hold_until_close_threshold != st.session_state.window_summary_hold_until_close_threshold
+        )
         recalculate_window_summary = (
             minutes_after_open_changed
             or entry_threshold_changed
+            or hold_until_close_threshold_changed
             or not st.session_state.window_summary_rows
         )
 
@@ -1187,6 +1274,7 @@ def render_dashboard():
                 history_time_column,
                 minutes_after_open,
                 entry_threshold,
+                hold_until_close_threshold,
             )
             if latest_loss_target is not None:
                 last_loss_target = st.session_state.window_summary_last_loss_target
@@ -1203,12 +1291,14 @@ def render_dashboard():
                 history_time_column,
                 minutes_after_open,
                 entry_threshold,
+                hold_until_close_threshold,
             )
             st.session_state.window_summary_rows = summary_rows
             st.session_state.window_summary_last_loss_target = latest_loss_target
             st.session_state.window_summary_last_updated = pd.Timestamp.utcnow()
             st.session_state.window_summary_minutes_after_open = minutes_after_open
             st.session_state.window_summary_entry_threshold = entry_threshold
+            st.session_state.window_summary_hold_until_close_threshold = hold_until_close_threshold
 
         with st.expander("Window summary"):
             summary_df = pd.DataFrame(st.session_state.window_summary_rows)
