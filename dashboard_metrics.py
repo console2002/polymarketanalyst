@@ -30,7 +30,7 @@ def _rolling_window_dates(closed_trades, reference_time, window_size):
         {
             trade["exit_time"].date()
             for trade in closed_trades
-            if trade["exit_time"].date() <= reference_date
+            if trade["exit_time"].date() < reference_date
         }
     )
     if not unique_dates:
@@ -88,7 +88,7 @@ def summarize_profit_loss(closed_trades, reference_time, today_start_time=None):
         "today": _sum_trades(_filter_trades_since(closed_trades, today_start, reference_ts)),
         "week_to_date": _sum_trades(_filter_trades_by_dates(closed_trades, rolling_week_dates, reference_ts)),
         "month_to_date": _sum_trades(_filter_trades_by_dates(closed_trades, rolling_month_dates, reference_ts)),
-        "all_time": _sum_trades(closed_trades),
+        "all_time": _sum_trades(_filter_trades_since(closed_trades, pd.Timestamp.min, reference_ts)),
     }
 
 
