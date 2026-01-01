@@ -12,6 +12,7 @@ from dashboard_metrics import (
     summarize_drawdowns,
     summarize_profit_loss,
 )
+from dashboard_processing import align_market_open, calculate_market_trade_records
 
 
 # Get the directory of the current script
@@ -179,7 +180,16 @@ def _reshape_new_style_csv(df):
     return wide
 
 
-def _load_data_file(data_file):
+def _get_file_signature(data_file):
+    try:
+        stat_result = os.stat(data_file)
+    except FileNotFoundError:
+        return None
+    return data_file, stat_result.st_mtime, stat_result.st_size
+
+
+@st.cache_data(show_spinner=False)
+def _load_data_file_cached(data_file, modified_time, file_size):
     df = pd.read_csv(data_file)
     if "timestamp_et" in df.columns:
         df = _reshape_new_style_csv(df)
@@ -196,6 +206,13 @@ def _load_data_file(data_file):
     return df
 
 
+def _load_data_file(data_file):
+    signature = _get_file_signature(data_file)
+    if signature is None:
+        raise FileNotFoundError(data_file)
+    return _load_data_file_cached(*signature)
+
+
 def load_data(selected_date, files_by_date, legacy_path):
     try:
         data_file, resolved_date = _resolve_data_file(selected_date, files_by_date, legacy_path)
@@ -210,22 +227,29 @@ def load_data(selected_date, files_by_date, legacy_path):
         return None, None
 
 
-def load_all_data(files_by_date, legacy_path):
+@st.cache_data(show_spinner=False)
+def _load_all_data_cached(file_signatures):
     data_frames = []
-    for _, data_file in sorted(files_by_date.items()):
-        try:
-            df = _load_data_file(data_file)
-        except FileNotFoundError:
-            continue
-        data_frames.append(df)
-    if legacy_path:
-        try:
-            data_frames.append(_load_data_file(legacy_path))
-        except FileNotFoundError:
-            pass
+    for data_file, modified_time, file_size in file_signatures:
+        data_frames.append(_load_data_file_cached(data_file, modified_time, file_size))
     if not data_frames:
         return None
     return pd.concat(data_frames, ignore_index=True)
+
+
+def load_all_data(files_by_date, legacy_path):
+    file_signatures = []
+    for _, data_file in sorted(files_by_date.items()):
+        signature = _get_file_signature(data_file)
+        if signature is not None:
+            file_signatures.append(signature)
+    if legacy_path:
+        signature = _get_file_signature(legacy_path)
+        if signature is not None:
+            file_signatures.append(signature)
+    if not file_signatures:
+        return None
+    return _load_all_data_cached(tuple(file_signatures))
 
 # Top-row controls
 files_by_date, legacy_path = _get_available_data_files()
@@ -268,173 +292,6 @@ def _format_metric(value, formatter):
         return "N/A"
 
 
-def _last_non_zero(series):
-    cleaned = series.replace(0, np.nan).dropna()
-    if cleaned.empty:
-        return np.nan
-    return cleaned.iloc[-1]
-
-def _align_market_open(timestamp):
-    if timestamp is None or pd.isna(timestamp):
-        return pd.NaT
-    return pd.Timestamp(timestamp).floor("15min")
-
-
-def _get_close_prices(market_group, time_column, close_window_points=6):
-    market_group = market_group.sort_values(time_column)
-    if market_group.empty:
-        return np.nan, np.nan
-
-    window_points = max(close_window_points, int(len(market_group) * 0.1))
-    tail_group = market_group.tail(window_points)
-
-    def _median_non_zero(series):
-        cleaned = series.replace(0, np.nan).dropna()
-        if cleaned.empty:
-            return np.nan
-        return cleaned.median()
-
-    close_up = _median_non_zero(tail_group["UpPrice"])
-    close_down = _median_non_zero(tail_group["DownPrice"])
-
-    if pd.isna(close_up):
-        close_up = _last_non_zero(market_group["UpPrice"])
-    if pd.isna(close_down):
-        close_down = _last_non_zero(market_group["DownPrice"])
-
-    return close_up, close_down
-
-
-def _find_threshold_crossing(series, threshold):
-    above = series >= threshold
-    crossings = above & ~above.shift(fill_value=False)
-    if crossings.any():
-        return crossings[crossings].index[0]
-    return None
-
-
-def _calculate_market_trade_records(
-    df,
-    time_column,
-    minutes_after_open,
-    entry_threshold,
-    hold_until_close_threshold,
-    target_order=None,
-):
-    if df is None or df.empty:
-        return []
-
-    df = df.copy()
-    if "TargetTime_dt" not in df.columns:
-        df["TargetTime_dt"] = pd.to_datetime(df["TargetTime"], format=TIME_FORMAT, errors="coerce")
-
-    minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
-    probability_threshold = float(entry_threshold)
-    hold_threshold = float(hold_until_close_threshold)
-
-    if target_order is None:
-        target_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
-
-    target_indices = {target: idx for idx, target in enumerate(target_order)}
-    last_index = len(target_order) - 1
-    records = []
-
-    for target_time in target_order:
-        market_group = df[df["TargetTime_dt"] == target_time].sort_values(time_column)
-        if market_group.empty:
-            continue
-
-        market_open = _align_market_open(market_group[time_column].min())
-        open_threshold_time = market_open + minutes_threshold
-        eligible = market_group[market_group[time_column] >= open_threshold_time].copy()
-
-        expected_side = None
-        entry_time = None
-        entry_price = None
-        if not eligible.empty:
-            up_cross_index = _find_threshold_crossing(eligible["UpPrice"], probability_threshold)
-            down_cross_index = _find_threshold_crossing(eligible["DownPrice"], probability_threshold)
-            candidates = []
-            if up_cross_index is not None:
-                candidates.append(
-                    ("Up", eligible.loc[up_cross_index, time_column], eligible.loc[up_cross_index, "UpPrice"])
-                )
-            if down_cross_index is not None:
-                candidates.append(
-                    ("Down", eligible.loc[down_cross_index, time_column], eligible.loc[down_cross_index, "DownPrice"])
-                )
-            if candidates:
-                expected_side, entry_time, entry_price = min(candidates, key=lambda item: item[1])
-
-        market_end_time = market_open + pd.Timedelta(minutes=15)
-        market_close_time = market_group[time_column].iloc[-1]
-        target_index = target_indices.get(target_time)
-        market_closed = (
-            (target_index is not None and target_index < last_index)
-            or market_close_time >= market_end_time
-        )
-
-        close_up, close_down = _get_close_prices(market_group, time_column)
-        exit_time = None
-        exit_price = None
-        exit_reason = None
-        if expected_side and entry_price is not None and not pd.isna(entry_price):
-            if entry_price >= hold_threshold:
-                exit_time = market_close_time
-                exit_reason = "held_to_close"
-            else:
-                side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
-                eligible_after_entry = eligible[eligible[time_column] >= entry_time]
-                exit_cross_index = _find_threshold_crossing(eligible_after_entry[side_column], hold_threshold)
-                if exit_cross_index is not None:
-                    exit_time = eligible_after_entry.loc[exit_cross_index, time_column]
-                    exit_price = eligible_after_entry.loc[exit_cross_index, side_column]
-                    exit_reason = "threshold"
-                else:
-                    exit_time = market_close_time
-                    exit_reason = "held_to_close"
-
-            if exit_time == market_close_time:
-                exit_price = close_up if expected_side == "Up" else close_down
-
-        outcome = None
-        if market_closed:
-            if expected_side:
-                if exit_reason == "threshold":
-                    outcome = "Win"
-                else:
-                    if pd.isna(close_up) or pd.isna(close_down):
-                        outcome = "N/A"
-                    elif close_up == close_down:
-                        outcome = "Tie"
-                    elif expected_side == "Up":
-                        outcome = "Win" if close_up > close_down else "Lose"
-                    else:
-                        outcome = "Win" if close_down > close_up else "Lose"
-        else:
-            outcome = "Pending"
-
-        records.append(
-            {
-                "target_time_dt": target_time,
-                "target_time": market_group["TargetTime"].iloc[0] if "TargetTime" in market_group.columns else None,
-                "market_open": market_open,
-                "open_threshold_time": open_threshold_time,
-                "market_close_time": market_close_time,
-                "expected_side": expected_side,
-                "entry_time": entry_time,
-                "entry_price": entry_price,
-                "exit_time": exit_time,
-                "exit_price": exit_price,
-                "exit_reason": exit_reason,
-                "outcome": outcome,
-                "close_up": close_up,
-                "close_down": close_down,
-                "market_closed": market_closed,
-            }
-        )
-
-    return records
 
 
 def _split_trade_records(trade_records):
@@ -458,12 +315,13 @@ def _calculate_strike_rate_metrics(
     hold_until_close_threshold,
     history_segment="strike",
 ):
-    trade_records = _calculate_market_trade_records(
+    trade_records = calculate_market_trade_records(
         df,
         time_column,
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
+        TIME_FORMAT,
     )
 
     autotune_records, strike_records = _split_trade_records(trade_records)
@@ -499,12 +357,13 @@ def _calculate_window_summary(
 ):
     summary_rows = []
     loss_targets = []
-    trade_records = _calculate_market_trade_records(
+    trade_records = calculate_market_trade_records(
         df,
         time_column,
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
+        TIME_FORMAT,
     )
 
     for record in trade_records:
@@ -873,14 +732,14 @@ def prepare_probability_window(
         "df_window": df_window,
         "latest": latest,
         "max_offset": max_offset,
-        "total_markets": total_markets,
+        "total_markets": chart_data.get("total_markets"),
     }
 
 def build_market_summary_table(df_window, latest, time_column):
     latest_timestamp = df_window[time_column].max()
     market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
     market_start_time = market_rows[time_column].min()
-    market_open_time = _align_market_open(market_start_time)
+    market_open_time = align_market_open(market_start_time)
     if pd.isna(market_start_time):
         countdown_display = "N/A"
     else:
@@ -1001,12 +860,13 @@ def render_probability_history(
 
     ordered_targets = df_window["TargetTime_dt"].dropna().drop_duplicates().tolist()
     full_target_dt_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
-    trade_records = _calculate_market_trade_records(
+    trade_records = calculate_market_trade_records(
         df_window,
         time_column,
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
+        TIME_FORMAT,
         target_order=full_target_dt_order,
     )
     trade_record_map = {record["target_time_dt"]: record for record in trade_records}
@@ -1235,12 +1095,13 @@ def compute_summary_state(
     profit_loss_summary = st.session_state.profit_loss_summary
     drawdown_summary = st.session_state.drawdown_summary
     if recalculate_summary and history_df is not None and not history_df.empty:
-        profit_loss_trade_records = _calculate_market_trade_records(
+        profit_loss_trade_records = calculate_market_trade_records(
             history_df,
             history_time_column,
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
+            TIME_FORMAT,
         )
         closed_trades = build_trade_pnl_records(profit_loss_trade_records, trade_value_usd)
         profit_loss_summary = summarize_profit_loss(
@@ -1467,8 +1328,14 @@ def render_dashboard():
 
     jump_container = st.sidebar.container()
 
+    progress_container = st.empty()
+    status_container = st.status("Loading dashboard data…", expanded=True)
+    progress_bar = progress_container.progress(0, text="Loading data files…")
+
     df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
+    progress_bar.progress(0.25, text="Loaded selected data file.")
     history_df = load_all_data(files_by_date, legacy_path)
+    progress_bar.progress(0.45, text="Loaded historical data.")
     if history_df is None or history_df.empty:
         history_df = df
     if selected_date and resolved_date and selected_date != resolved_date:
@@ -1505,7 +1372,7 @@ def render_dashboard():
         today_start_time = df[time_column].min()
         if pd.isna(today_start_time):
             today_start_time = None
-        current_open = _align_market_open(history_latest_timestamp)
+        current_open = align_market_open(history_latest_timestamp)
 
         probability_window = prepare_probability_window(
             df,
@@ -1514,6 +1381,7 @@ def render_dashboard():
             resample_interval,
             jump_container,
         )
+        progress_bar.progress(0.65, text="Prepared market window.")
 
         summary_state = compute_summary_state(
             history_df,
@@ -1527,6 +1395,7 @@ def render_dashboard():
             today_start_time,
             current_open,
         )
+        progress_bar.progress(0.85, text="Calculated summary metrics.")
 
         header_cols = st.columns([2.2, 3, 2.2])
         with header_cols[0]:
@@ -1570,9 +1439,15 @@ def render_dashboard():
             st.dataframe(summary_df, width='stretch')
 
         st.caption(f"Last updated: {chart_result['latest']['Timestamp']}")
+        progress_bar.progress(1.0, text="Dashboard ready.")
+        status_container.update(state="complete", label="Dashboard ready")
+        progress_container.empty()
 
     else:
         st.warning("No data found yet. Please ensure data_logger.py is running.")
+        progress_bar.progress(1.0, text="No data available.")
+        status_container.update(state="complete", label="No data available")
+        progress_container.empty()
 
 
 render_dashboard()
