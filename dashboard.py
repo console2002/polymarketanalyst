@@ -228,23 +228,6 @@ available_dates = sorted(files_by_date)
 latest_available_date = max(available_dates) if available_dates else None
 min_available_date = min(available_dates) if available_dates else None
 
-col_top1, col_top2 = st.columns(2)
-with col_top1:
-    st.button('Refresh Data', key='refresh_data_button', width='stretch')
-    auto_refresh = st.checkbox("Auto-refresh", value=True)
-with col_top2:
-    if available_dates:
-        selected_date = st.date_input(
-            "Data date",
-            value=latest_available_date,
-            min_value=min_available_date,
-            max_value=latest_available_date,
-            help="Select a historical data file by date. Defaults to the latest available file.",
-        )
-    else:
-        selected_date = None
-        st.caption("No dated CSV files found; using legacy data file if available.")
-
 
 def _resample_market_data(df, time_column, interval):
     if df.empty or not interval or interval == "all":
@@ -832,6 +815,31 @@ def _update_window_summary_state(
         st.session_state.window_summary_hold_until_close_threshold = hold_until_close_threshold
 
 def render_dashboard():
+    title_col, refresh_col, date_col, jump_col = st.columns([2.5, 1.1, 1.2, 1.6])
+    with title_col:
+        st.title("Polymarket 15m BTC Monitor")
+    with refresh_col:
+        st.button("Refresh Data", key="refresh_data_button", width="stretch")
+        st.checkbox(
+            "Auto-refresh",
+            key="auto_refresh",
+            value=st.session_state.get("auto_refresh", True),
+        )
+    with date_col:
+        if available_dates:
+            selected_date = st.date_input(
+                "Data date",
+                value=latest_available_date,
+                min_value=min_available_date,
+                max_value=latest_available_date,
+                help="Select a historical data file by date. Defaults to the latest available file.",
+            )
+        else:
+            selected_date = None
+            st.caption("No dated CSV files found; using legacy data file if available.")
+    with jump_col:
+        jump_container = st.container()
+
     df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
     history_df = load_all_data(files_by_date, legacy_path)
     if history_df is None or history_df.empty:
@@ -873,33 +881,18 @@ def render_dashboard():
         if pd.isna(jump_default):
             jump_default = df[time_column].max()
 
-        header_col, jump_col = st.columns([3, 2])
-        with header_col:
-            st.title("Polymarket 15m BTC Monitor")
-        with jump_col:
-            jump_time = st.datetime_input(
-                "Jump to time",
-                value=jump_default,
-                help=f"Jump to the {window_size}-market window that includes this time.",
-            )
-            if st.button("Jump", key="window_jump_button") and total_markets:
-                eligible_times = [t for t in target_times if t and t <= jump_time]
-                if eligible_times:
-                    target_index = target_times.index(eligible_times[-1])
-                else:
-                    target_index = 0
-                st.session_state.window_offset = max(0, total_markets - (target_index + 1))
-
-        col_nav1, col_nav2, col_nav3 = st.columns([1, 1, 1])
-        with col_nav1:
-            if st.button("Back", key="window_back_button", disabled=st.session_state.window_offset >= max_offset):
-                st.session_state.window_offset = min(max_offset, st.session_state.window_offset + 1)
-        with col_nav2:
-            if st.button("Forward", key="window_forward_button", disabled=st.session_state.window_offset <= 0):
-                st.session_state.window_offset = max(0, st.session_state.window_offset - 1)
-        with col_nav3:
-            if st.button("Latest", key="window_latest_button", disabled=st.session_state.window_offset == 0):
-                st.session_state.window_offset = 0
+        jump_time = jump_container.datetime_input(
+            "Jump to time",
+            value=jump_default,
+            help=f"Jump to the {window_size}-market window that includes this time.",
+        )
+        if jump_container.button("Jump", key="window_jump_button") and total_markets:
+            eligible_times = [t for t in target_times if t and t <= jump_time]
+            if eligible_times:
+                target_index = target_times.index(eligible_times[-1])
+            else:
+                target_index = 0
+            st.session_state.window_offset = max(0, total_markets - (target_index + 1))
 
         if total_markets:
             window_end = total_markets - st.session_state.window_offset
@@ -1299,6 +1292,39 @@ def render_dashboard():
             elif st.session_state.autotune_message:
                 st.caption(st.session_state.autotune_message)
 
+        def _handle_window_back(offset_limit):
+            st.session_state.window_offset = min(offset_limit, st.session_state.window_offset + 1)
+
+        def _handle_window_forward():
+            st.session_state.window_offset = max(0, st.session_state.window_offset - 1)
+
+        def _handle_window_latest():
+            st.session_state.window_offset = 0
+
+        nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
+        with nav_col1:
+            st.button(
+                "Back",
+                key="window_back_button",
+                disabled=st.session_state.window_offset >= max_offset,
+                on_click=_handle_window_back,
+                args=(max_offset,),
+            )
+        with nav_col2:
+            st.button(
+                "Forward",
+                key="window_forward_button",
+                disabled=st.session_state.window_offset <= 0,
+                on_click=_handle_window_forward,
+            )
+        with nav_col3:
+            st.button(
+                "Latest",
+                key="window_latest_button",
+                disabled=st.session_state.window_offset == 0,
+                on_click=_handle_window_latest,
+            )
+
         _update_window_summary_state(
             history_df,
             history_time_column,
@@ -1359,11 +1385,10 @@ def render_dashboard():
         st.caption(f"Last updated: {latest['Timestamp']}")
 
     else:
-        st.title("Polymarket 15m BTC Monitor")
         st.warning("No data found yet. Please ensure data_logger.py is running.")
 
 
-if auto_refresh:
+if st.session_state.get("auto_refresh", True):
     render_dashboard = st.fragment(run_every=refresh_interval_seconds)(render_dashboard)
 
 render_dashboard()
