@@ -537,31 +537,44 @@ def _calculate_window_summary(
     )
 
     for record in trade_records:
-        if record["outcome"] == "Lose":
-            target_time = record["target_time_dt"]
-            market_group = df[df["TargetTime_dt"] == target_time].sort_values(time_column)
-            if market_group.empty:
-                continue
-            total_liq_series = market_group["UpVol"] + market_group["DownVol"]
-            up_price_series = market_group["UpPrice"].replace(0, np.nan)
-            summary_rows.append(
-                {
-                    "TargetTime": market_group["TargetTime"].iloc[0],
-                    "Market Open": record["market_open"],
-                    "First Crossing Side": record["expected_side"] or "None",
-                    "Crossing Time": record["entry_time"],
-                    "Crossing Price": record["entry_price"],
-                    "Exit Time": record["exit_time"],
-                    "Exit Price": record["exit_price"],
-                    "Final UpPrice": record["close_up"],
-                    "Final DownPrice": record["close_down"],
-                    "Win/Lose": record["outcome"],
-                    "Mean Total Liquidity": total_liq_series.mean(),
-                    "Max Total Liquidity": total_liq_series.max(),
-                    "Max UpPrice": up_price_series.max(),
-                    "Min UpPrice": up_price_series.min(),
-                }
-            )
+        if record["expected_side"] is None or record["entry_price"] is None:
+            continue
+        if record["exit_price"] is None or record["exit_reason"] is None:
+            continue
+        if not record["market_closed"] or record["outcome"] == "Pending":
+            continue
+
+        target_time = record["target_time_dt"]
+        market_group = df[df["TargetTime_dt"] == target_time].sort_values(time_column)
+        if market_group.empty:
+            continue
+
+        pnl_usd = None
+        if (
+            record["entry_price"] is not None
+            and record["exit_price"] is not None
+            and not pd.isna(record["entry_price"])
+            and not pd.isna(record["exit_price"])
+        ):
+            pnl_usd = record["exit_price"] - record["entry_price"]
+
+        summary_rows.append(
+            {
+                "TargetTime": market_group["TargetTime"].iloc[0],
+                "Market Open": record["market_open"],
+                "First Crossing Side": record["expected_side"] or "None",
+                "Crossing Time": record["entry_time"],
+                "Entry Price": record["entry_price"],
+                "Exit Time": record["exit_time"],
+                "Exit Price": record["exit_price"],
+                "Exit Reason": record["exit_reason"],
+                "P/L (USD)": pnl_usd,
+                "Outcome": record["outcome"],
+                "Final UpPrice": record["close_up"],
+                "Final DownPrice": record["close_down"],
+            }
+        )
+        if pnl_usd is not None and not pd.isna(pnl_usd) and pnl_usd < 0:
             loss_targets.append(target_time)
 
     latest_loss_target = max(loss_targets) if loss_targets else None
