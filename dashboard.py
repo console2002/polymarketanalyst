@@ -684,6 +684,8 @@ def _initialize_window_summary_state(minutes_after_open, entry_threshold, hold_u
         st.session_state.window_summary_last_updated = pd.NaT
     if "window_summary_last_loss_target" not in st.session_state:
         st.session_state.window_summary_last_loss_target = None
+    if "window_summary_last_market_open" not in st.session_state:
+        st.session_state.window_summary_last_market_open = pd.NaT
 
 
 def _update_window_summary_state(
@@ -693,6 +695,7 @@ def _update_window_summary_state(
     entry_threshold,
     hold_until_close_threshold,
     trade_value_usd,
+    current_open,
 ):
     _initialize_window_summary_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
     minutes_after_open_changed = (
@@ -710,6 +713,15 @@ def _update_window_summary_state(
         or hold_until_close_threshold_changed
         or not st.session_state.window_summary_rows
     )
+    if (
+        not recalculate_window_summary
+        and pd.notna(current_open)
+        and (
+            pd.isna(st.session_state.window_summary_last_market_open)
+            or current_open > st.session_state.window_summary_last_market_open
+        )
+    ):
+        recalculate_window_summary = True
 
     if not recalculate_window_summary and history_df is not None and not history_df.empty:
         latest_loss_target = _find_latest_loss_target(
@@ -744,6 +756,679 @@ def _update_window_summary_state(
         st.session_state.window_summary_minutes_after_open = minutes_after_open
         st.session_state.window_summary_entry_threshold = entry_threshold
         st.session_state.window_summary_hold_until_close_threshold = hold_until_close_threshold
+        st.session_state.window_summary_last_market_open = current_open
+
+
+def _initialize_summary_refresh_state(
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    trade_value_usd,
+    test_balance_start,
+):
+    if "last_summary_updated" not in st.session_state:
+        st.session_state.last_summary_updated = pd.NaT
+    if "last_summary_market_open" not in st.session_state:
+        st.session_state.last_summary_market_open = pd.NaT
+    if "summary_minutes_after_open" not in st.session_state:
+        st.session_state.summary_minutes_after_open = minutes_after_open
+    if "summary_entry_threshold" not in st.session_state:
+        st.session_state.summary_entry_threshold = entry_threshold
+    if "summary_hold_until_close_threshold" not in st.session_state:
+        st.session_state.summary_hold_until_close_threshold = hold_until_close_threshold
+    if "summary_trade_value_usd" not in st.session_state:
+        st.session_state.summary_trade_value_usd = trade_value_usd
+    if "summary_test_balance_start" not in st.session_state:
+        st.session_state.summary_test_balance_start = test_balance_start
+    if "profit_loss_summary" not in st.session_state:
+        st.session_state.profit_loss_summary = None
+    if "drawdown_summary" not in st.session_state:
+        st.session_state.drawdown_summary = None
+
+
+def _should_recalculate_summary(
+    current_open,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    trade_value_usd,
+    test_balance_start,
+):
+    should_recalculate = pd.isna(st.session_state.last_summary_updated)
+    if pd.notna(current_open):
+        last_market_open = st.session_state.last_summary_market_open
+        if pd.isna(last_market_open) or current_open > last_market_open:
+            should_recalculate = True
+    if (
+        minutes_after_open != st.session_state.summary_minutes_after_open
+        or entry_threshold != st.session_state.summary_entry_threshold
+        or hold_until_close_threshold != st.session_state.summary_hold_until_close_threshold
+        or trade_value_usd != st.session_state.summary_trade_value_usd
+        or test_balance_start != st.session_state.summary_test_balance_start
+    ):
+        should_recalculate = True
+    if not should_recalculate:
+        last_updated = st.session_state.last_summary_updated
+        now = pd.Timestamp.utcnow()
+        if pd.isna(last_updated) or now - last_updated >= pd.Timedelta(minutes=15):
+            should_recalculate = True
+    return should_recalculate
+
+
+def render_probability_history(
+    df,
+    history_df,
+    time_column,
+    history_time_column,
+    lookback_period,
+    resample_interval,
+    show_markers,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    jump_container,
+):
+    if 'window_offset' not in st.session_state:
+        st.session_state.window_offset = 0
+
+    window_size = int(lookback_period)
+    target_times = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
+    total_markets = len(target_times)
+    max_offset = max(0, total_markets - window_size)
+    if st.session_state.window_offset > max_offset:
+        st.session_state.window_offset = max_offset
+
+    jump_default = df['TargetTime_dt'].max()
+    if pd.isna(jump_default):
+        jump_default = df[time_column].max()
+
+    jump_time = jump_container.datetime_input(
+        "Jump to time",
+        value=jump_default,
+        help=f"Jump to the {window_size}-market window that includes this time.",
+    )
+    if jump_container.button("Jump", key="window_jump_button") and total_markets:
+        eligible_times = [t for t in target_times if t and t <= jump_time]
+        if eligible_times:
+            target_index = target_times.index(eligible_times[-1])
+        else:
+            target_index = 0
+        st.session_state.window_offset = max(0, total_markets - (target_index + 1))
+
+    if total_markets:
+        window_end = total_markets - st.session_state.window_offset
+        window_start = max(0, window_end - window_size)
+        active_targets = target_times[window_start:window_end]
+        df_window = df[df['TargetTime_dt'].isin(active_targets)]
+    else:
+        df_window = df
+
+    if df_window.empty:
+        st.warning("No data available for the selected window.")
+        st.stop()
+
+    df_window = _resample_market_data(df_window, time_column, resample_interval)
+
+    if df_window.empty:
+        st.warning("No data available after resampling.")
+        st.stop()
+
+    # Get latest from windowed data
+    latest = df_window.iloc[-1]
+
+    # Process data for charts (add gaps between different markets)
+    df_chart = df_window.copy().sort_values(time_column)
+    df_chart['group'] = (df_chart['TargetTime'] != df_chart['TargetTime'].shift()).cumsum()
+
+    segments = []
+    for _, group in df_chart.groupby('group'):
+        segments.append(group)
+        # Add gap row
+        gap_row = group.iloc[[-1]].copy()
+        gap_row[time_column] += pd.Timedelta(seconds=1)
+        # Set values to NaN to break the line
+        for col in ['UpPrice', 'DownPrice', 'UpVol', 'DownVol']:
+            gap_row[col] = np.nan
+        segments.append(gap_row)
+
+    df_chart = pd.concat(segments).reset_index(drop=True)
+
+    latest_timestamp = df_window[time_column].max()
+    history_latest_timestamp = (
+        history_df[history_time_column].max()
+        if history_df is not None and not history_df.empty
+        else latest_timestamp
+    )
+    summary_reference_time = df[time_column].max()
+    if pd.isna(summary_reference_time):
+        summary_reference_time = history_latest_timestamp
+    today_start_time = df[time_column].min()
+    if pd.isna(today_start_time):
+        today_start_time = None
+    current_open = _align_market_open(history_latest_timestamp)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
+        market_start_time = market_rows[time_column].min()
+        market_open_time = _align_market_open(market_start_time)
+        if pd.isna(market_start_time):
+            countdown_display = "N/A"
+        else:
+            market_end_time = market_open_time + pd.Timedelta(minutes=15)
+            remaining_seconds = int((market_end_time - latest_timestamp).total_seconds())
+            remaining_seconds = max(0, remaining_seconds)
+            minutes_left = remaining_seconds // 60
+            seconds_left = remaining_seconds % 60
+            countdown_display = f"{minutes_left:02d}:{seconds_left:02d}"
+        st.metric("Minutes Left (MM:SS)", countdown_display)
+    with col2:
+        st.metric(
+            "Yes (Up) Cost",
+            _format_metric(latest.get("UpPrice"), lambda v: f"${v:.2f}"),
+        )
+    with col3:
+        st.metric(
+            "No (Down) Cost",
+            _format_metric(latest.get("DownPrice"), lambda v: f"${v:.2f}"),
+        )
+
+    # Initialize zoom mode
+    if 'zoom_mode' not in st.session_state:
+        st.session_state.zoom_mode = None
+
+    # Zoom Controls
+    col_z1, col_z2 = st.columns([1, 10])
+    with col_z1:
+        if st.button("Reset Zoom", key='reset_zoom_button'):
+            st.session_state.zoom_mode = None
+    with col_z2:
+        if st.button("Zoom Last 15m", key='zoom_15m_button'):
+            st.session_state.zoom_mode = 'last_15m'
+
+    # Calculate range based on mode
+    current_range = None
+    if st.session_state.zoom_mode == 'last_15m':
+        end_time = df_window[time_column].max()
+        start_time = end_time - pd.Timedelta(minutes=15)
+        current_range = [start_time, end_time]
+
+    trace_mode = "lines+markers" if show_markers else "lines"
+    colors = {
+        "up": "rgba(34, 139, 34, 0.75)",
+        "down": "rgba(220, 20, 60, 0.65)",
+    }
+
+    # Create Subplots with shared x-axis
+    fig = make_subplots(
+        rows=1,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        specs=[[{}]],
+        subplot_titles=(
+            "Probability History",
+        ),
+    )
+
+    # Probability Chart (Row 1)
+    fig.add_trace(
+        go.Scatter(
+            x=df_chart[time_column],
+            y=df_chart['UpPrice'],
+            name="Yes (Up)",
+            line=dict(color=colors["up"], width=2, shape="spline", smoothing=1.1),
+            connectgaps=True,
+            mode=trace_mode,
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df_chart[time_column],
+            y=df_chart['DownPrice'],
+            name="No (Down)",
+            line=dict(color=colors["down"], dash='dash', width=2, shape="spline", smoothing=1.1),
+            connectgaps=True,
+            mode=trace_mode,
+        ),
+        row=1,
+        col=1,
+    )
+
+    ordered_targets = df_window["TargetTime_dt"].dropna().drop_duplicates().tolist()
+    full_target_dt_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
+    trade_records = _calculate_market_trade_records(
+        df_window,
+        time_column,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        target_order=full_target_dt_order,
+    )
+    trade_record_map = {record["target_time_dt"]: record for record in trade_records}
+    entry_times = []
+    entry_prices = []
+    exit_times = []
+    exit_prices = []
+    held_times = []
+    held_prices = []
+
+    for target_time in ordered_targets:
+        market_group = df_window[df_window["TargetTime_dt"] == target_time].sort_values(time_column)
+        if market_group.empty:
+            continue
+        record = trade_record_map.get(target_time)
+        if record is None:
+            continue
+        open_threshold_time = record["open_threshold_time"]
+        if pd.notna(open_threshold_time):
+            add_vline_all_rows(
+                fig,
+                open_threshold_time,
+                line_width=1,
+                line_dash="solid",
+                line_color="rgba(200, 200, 200, 0.4)",
+            )
+
+        if record["entry_time"] is not None and record["entry_price"] is not None:
+            entry_times.append(record["entry_time"])
+            entry_prices.append(record["entry_price"])
+
+        if record["exit_time"] is not None and record["exit_price"] is not None:
+            if record["exit_reason"] == "threshold":
+                exit_times.append(record["exit_time"])
+                exit_prices.append(record["exit_price"])
+            elif record["exit_reason"] == "held_to_close":
+                held_times.append(record["exit_time"])
+                held_prices.append(record["exit_price"])
+
+        if record["outcome"] in {"Win", "Lose", "Tie"}:
+            if record["exit_reason"] == "threshold":
+                outcome_text = f"{record['outcome']} (exit)"
+            else:
+                outcome_text = f"{record['outcome']} (close)"
+
+            outcome_color = "#808080" if record["outcome"] == "Tie" else (
+                "#00AA00" if record["outcome"] == "Win" else "#FF0000"
+            )
+            fig.add_annotation(
+                x=record["exit_time"] or record["market_close_time"],
+                y=1.03,
+                text=outcome_text,
+                showarrow=False,
+                font=dict(color=outcome_color, size=16),
+                row=1,
+                col=1,
+            )
+
+    if entry_times:
+        fig.add_trace(
+            go.Scatter(
+                x=entry_times,
+                y=entry_prices,
+                mode="markers+text",
+                marker=dict(color="#1E90FF", size=9),
+                text=["entry"] * len(entry_times),
+                textposition="top center",
+                textfont=dict(size=10, color="#1E90FF"),
+                name="Entry",
+                showlegend=False,
+            ),
+            row=1,
+            col=1,
+        )
+    if exit_times:
+        fig.add_trace(
+            go.Scatter(
+                x=exit_times,
+                y=exit_prices,
+                mode="markers+text",
+                marker=dict(color="#6A5ACD", size=9),
+                text=["exit"] * len(exit_times),
+                textposition="top center",
+                textfont=dict(size=10, color="#6A5ACD"),
+                name="Exit",
+                showlegend=False,
+            ),
+            row=1,
+            col=1,
+        )
+    if held_times:
+        fig.add_trace(
+            go.Scatter(
+                x=held_times,
+                y=held_prices,
+                mode="markers+text",
+                marker=dict(color="#808080", size=9),
+                text=["held to close"] * len(held_times),
+                textposition="top center",
+                textfont=dict(size=10, color="#808080"),
+                name="Held to close",
+                showlegend=False,
+            ),
+            row=1,
+            col=1,
+        )
+
+    # Add vertical lines for market transitions to both plots
+    # Identify where TargetTime changes
+    transitions = df_window.loc[df_window['TargetTime'].shift() != df_window['TargetTime'], time_column].iloc[1:]
+
+    for t in transitions:
+        add_vline_all_rows(fig, t, line_width=1, line_dash="dot", line_color="gray")
+
+    # Update Layout
+    fig.update_layout(
+        height=600,
+        template="plotly_white",
+        hovermode="x unified",
+        xaxis_title="Time",
+        yaxis=dict(title="Probability", range=[0, 1.05]),
+        xaxis=dict(rangeslider=dict(visible=False), type="date"),
+    )
+    # Explicitly set range for the chart x-axis.
+    if current_range:
+        fig.update_xaxes(range=current_range, row=1, col=1)
+
+    # Enable crosshair (spike lines) across both subplots
+    fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
+    st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
+
+    def _handle_window_back(offset_limit):
+        st.session_state.window_offset = min(offset_limit, st.session_state.window_offset + 1)
+
+    def _handle_window_forward():
+        st.session_state.window_offset = max(0, st.session_state.window_offset - 1)
+
+    def _handle_window_latest():
+        st.session_state.window_offset = 0
+
+    nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
+    with nav_col1:
+        st.button(
+            "Back",
+            key="window_back_button",
+            disabled=st.session_state.window_offset >= max_offset,
+            on_click=_handle_window_back,
+            args=(max_offset,),
+        )
+    with nav_col2:
+        st.button(
+            "Forward",
+            key="window_forward_button",
+            disabled=st.session_state.window_offset <= 0,
+            on_click=_handle_window_forward,
+        )
+    with nav_col3:
+        st.button(
+            "Latest",
+            key="window_latest_button",
+            disabled=st.session_state.window_offset == 0,
+            on_click=_handle_window_latest,
+        )
+
+    return {
+        "df_window": df_window,
+        "latest": latest,
+        "summary_reference_time": summary_reference_time,
+        "today_start_time": today_start_time,
+        "current_open": current_open,
+        "max_offset": max_offset,
+    }
+
+
+def render_summary_sections(
+    history_df,
+    history_time_column,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    trade_value_usd,
+    test_balance_start,
+    summary_reference_time,
+    today_start_time,
+    current_open,
+):
+    _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
+    _update_strike_rate_state(
+        history_df,
+        history_time_column,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        current_open,
+    )
+
+    strike_rate = st.session_state.strike_rate
+    avg_entry_price = st.session_state.get("avg_entry_price", np.nan)
+    win_rate_needed = st.session_state.get("win_rate_needed", np.nan)
+    strike_sample_size = st.session_state.get("strike_sample_size")
+    autotune_sample_size = st.session_state.get("autotune_sample_size")
+
+    _update_window_summary_state(
+        history_df,
+        history_time_column,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        trade_value_usd,
+        current_open,
+    )
+
+    _initialize_summary_refresh_state(
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        trade_value_usd,
+        test_balance_start,
+    )
+    recalculate_summary = _should_recalculate_summary(
+        current_open,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        trade_value_usd,
+        test_balance_start,
+    )
+    profit_loss_summary = st.session_state.profit_loss_summary
+    drawdown_summary = st.session_state.drawdown_summary
+    if recalculate_summary and history_df is not None and not history_df.empty:
+        profit_loss_trade_records = _calculate_market_trade_records(
+            history_df,
+            history_time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+        )
+        closed_trades = build_trade_pnl_records(profit_loss_trade_records, trade_value_usd)
+        profit_loss_summary = summarize_profit_loss(
+            closed_trades,
+            reference_time=summary_reference_time,
+            today_start_time=today_start_time,
+        )
+        drawdown_summary = summarize_drawdowns(
+            closed_trades,
+            reference_time=summary_reference_time,
+            test_balance_start=test_balance_start,
+            today_start_time=today_start_time,
+        )
+        st.session_state.profit_loss_summary = profit_loss_summary
+        st.session_state.drawdown_summary = drawdown_summary
+        st.session_state.last_summary_updated = pd.Timestamp.utcnow()
+        st.session_state.last_summary_market_open = current_open
+        st.session_state.summary_minutes_after_open = minutes_after_open
+        st.session_state.summary_entry_threshold = entry_threshold
+        st.session_state.summary_hold_until_close_threshold = hold_until_close_threshold
+        st.session_state.summary_trade_value_usd = trade_value_usd
+        st.session_state.summary_test_balance_start = test_balance_start
+
+    profit_loss_summary = profit_loss_summary or {}
+    drawdown_summary = drawdown_summary or {}
+    st.subheader("Profit/Loss")
+    pnl_table_col, gauge_col = st.columns([1.4, 1])
+    with pnl_table_col:
+        pnl_table = pd.DataFrame(
+            [
+                {
+                    "Period": "Today",
+                    "P/L (USD)": _format_metric(
+                        profit_loss_summary.get("today"),
+                        lambda v: f"${v:,.2f}",
+                    ),
+                    "Max Drawdown %": _format_metric(
+                        drawdown_summary.get("today"),
+                        lambda v: f"{v * 100:.2f}%",
+                    ),
+                },
+                {
+                    "Period": "7-day rolling",
+                    "P/L (USD)": _format_metric(
+                        profit_loss_summary.get("week_to_date"),
+                        lambda v: f"${v:,.2f}",
+                    ),
+                    "Max Drawdown %": _format_metric(
+                        drawdown_summary.get("week_to_date"),
+                        lambda v: f"{v * 100:.2f}%",
+                    ),
+                },
+                {
+                    "Period": "30-day rolling",
+                    "P/L (USD)": _format_metric(
+                        profit_loss_summary.get("month_to_date"),
+                        lambda v: f"${v:,.2f}",
+                    ),
+                    "Max Drawdown %": _format_metric(
+                        drawdown_summary.get("month_to_date"),
+                        lambda v: f"{v * 100:.2f}%",
+                    ),
+                },
+                {
+                    "Period": "All Time",
+                    "P/L (USD)": _format_metric(
+                        profit_loss_summary.get("all_time"),
+                        lambda v: f"${v:,.2f}",
+                    ),
+                    "Max Drawdown %": _format_metric(
+                        None,
+                        lambda v: f"{v * 100:.2f}%",
+                    ),
+                },
+            ]
+        ).set_index("Period")
+        st.dataframe(pnl_table, width="stretch")
+    with gauge_col:
+        gauge_value = 50 if pd.isna(strike_rate) else strike_rate
+        gauge_value = max(50, min(100, gauge_value))
+        win_rate_needed_pct = 50 if pd.isna(win_rate_needed) else win_rate_needed
+        win_rate_needed_pct = max(50, min(100, win_rate_needed_pct))
+        green_end = win_rate_needed_pct
+        red_start = win_rate_needed_pct
+        gauge_fig = go.Figure(
+            go.Indicator(
+                mode="gauge+number",
+                value=gauge_value,
+                number={"suffix": "%", "valueformat": ".1f"},
+                title={"text": "Strike Rate"},
+                gauge={
+                    "shape": "angular",
+                    "axis": {"range": [50, 100]},
+                    "bar": {"color": "rgba(0, 0, 0, 0)"},
+                    "steps": [
+                        {"range": [50, green_end], "color": "red"},
+                        {"range": [red_start, 100], "color": "green"},
+                    ],
+                    "threshold": {
+                        "line": {"color": "black", "width": 3},
+                        "thickness": 0.8,
+                        "value": gauge_value,
+                    },
+                },
+            )
+        )
+        gauge_fig.update_layout(
+            height=250,
+            margin=dict(l=10, r=10, t=60, b=10),
+        )
+        st.plotly_chart(gauge_fig, width='stretch', config={'displayModeBar': False})
+        average_entry_display = f"{avg_entry_price:.2f}" if not pd.isna(avg_entry_price) else "N/A"
+        win_rate_display = f"{win_rate_needed:.2f}%" if not pd.isna(win_rate_needed) else "N/A"
+        if not pd.isna(strike_rate) and not pd.isna(win_rate_needed):
+            edge_value = strike_rate - win_rate_needed
+            edge_display = f"{edge_value:+.2f}%"
+        else:
+            edge_display = "N/A"
+        if strike_sample_size is not None and autotune_sample_size is not None:
+            st.caption(
+                f"Samples: autotune={autotune_sample_size}, strike rate={strike_sample_size}"
+            )
+        metrics_container = st.container()
+        with metrics_container:
+            metrics_table = pd.DataFrame(
+                {
+                    "Metric": ["Average Entry", "Win Rate Needed", "Edge"],
+                    "Value": [
+                        average_entry_display,
+                        win_rate_display,
+                        edge_display,
+                    ],
+                }
+            )
+            st.table(metrics_table)
+        autotune_clicked = st.button(
+            "Autotune",
+            key="autotune_button",
+            use_container_width=True,
+        )
+        if autotune_clicked:
+            progress_container = st.empty()
+            status_container = st.status("Autotuning…", expanded=True)
+            progress_bar = progress_container.progress(0)
+            best_result = None
+
+            def _progress_callback(current_step, total_steps, message):
+                progress_bar.progress(current_step / total_steps)
+                status_container.write(message)
+
+            with status_container:
+                def _autotune_metrics(df, column, minutes, threshold, hold_threshold):
+                    return _calculate_strike_rate_metrics(
+                        df,
+                        column,
+                        minutes,
+                        threshold,
+                        hold_threshold,
+                        history_segment="autotune",
+                    )
+
+                best_result = run_autotune(
+                    history_df,
+                    history_time_column,
+                    _autotune_metrics,
+                    progress_callback=_progress_callback,
+                )
+            progress_container.empty()
+            status_container.update(state="complete", label="Autotune complete")
+            if best_result:
+                st.session_state.autotune_result = best_result
+                st.session_state.autotune_message = None
+            else:
+                st.session_state.autotune_result = None
+                st.session_state.autotune_message = "No viable data for autotune"
+        if st.session_state.autotune_result:
+            result = st.session_state.autotune_result
+            st.caption(
+                "Best: "
+                f"minutes_after_open={result['minutes_after_open']}, "
+                f"entry_threshold={result['entry_threshold']:.2f}, "
+                f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
+                f"strike_rate={result['strike_rate']:.2f}%, "
+                f"win_rate_needed={result['win_rate_needed']:.2f}%, "
+                f"edge={result['edge']:.2f}%"
+            )
+        elif st.session_state.autotune_message:
+            st.caption(st.session_state.autotune_message)
 
 def render_dashboard():
     title_col, refresh_col = st.columns([3, 1])
@@ -798,560 +1483,43 @@ def render_dashboard():
         else:
             history_time_column = time_column
 
-        if 'window_offset' not in st.session_state:
-            st.session_state.window_offset = 0
-
-        window_size = int(lookback_period)
-        target_times = df['TargetTime_dt'].dropna().drop_duplicates().tolist()
-        total_markets = len(target_times)
-        max_offset = max(0, total_markets - window_size)
-        if st.session_state.window_offset > max_offset:
-            st.session_state.window_offset = max_offset
-
-        jump_default = df['TargetTime_dt'].max()
-        if pd.isna(jump_default):
-            jump_default = df[time_column].max()
-
-        jump_time = jump_container.datetime_input(
-            "Jump to time",
-            value=jump_default,
-            help=f"Jump to the {window_size}-market window that includes this time.",
-        )
-        if jump_container.button("Jump", key="window_jump_button") and total_markets:
-            eligible_times = [t for t in target_times if t and t <= jump_time]
-            if eligible_times:
-                target_index = target_times.index(eligible_times[-1])
-            else:
-                target_index = 0
-            st.session_state.window_offset = max(0, total_markets - (target_index + 1))
-
-        if total_markets:
-            window_end = total_markets - st.session_state.window_offset
-            window_start = max(0, window_end - window_size)
-            active_targets = target_times[window_start:window_end]
-            df_window = df[df['TargetTime_dt'].isin(active_targets)]
-        else:
-            df_window = df
-
-        if df_window.empty:
-            st.warning("No data available for the selected window.")
-            st.stop()
-
-        df_window = _resample_market_data(df_window, time_column, resample_interval)
-
-        if df_window.empty:
-            st.warning("No data available after resampling.")
-            st.stop()
-
-        # Get latest from windowed data
-        latest = df_window.iloc[-1]
-
-        # Process data for charts (add gaps between different markets)
-        df_chart = df_window.copy().sort_values(time_column)
-        df_chart['group'] = (df_chart['TargetTime'] != df_chart['TargetTime'].shift()).cumsum()
-
-        segments = []
-        for _, group in df_chart.groupby('group'):
-            segments.append(group)
-            # Add gap row
-            gap_row = group.iloc[[-1]].copy()
-            gap_row[time_column] += pd.Timedelta(seconds=1)
-            # Set values to NaN to break the line
-            for col in ['UpPrice', 'DownPrice', 'UpVol', 'DownVol']:
-                gap_row[col] = np.nan
-            segments.append(gap_row)
-
-        df_chart = pd.concat(segments).reset_index(drop=True)
-
-        latest_timestamp = df_window[time_column].max()
-        history_latest_timestamp = (
-            history_df[history_time_column].max()
-            if history_df is not None and not history_df.empty
-            else latest_timestamp
-        )
-        summary_reference_time = df[time_column].max()
-        if pd.isna(summary_reference_time):
-            summary_reference_time = history_latest_timestamp
-        today_start_time = df[time_column].min()
-        if pd.isna(today_start_time):
-            today_start_time = None
-        current_open = _align_market_open(history_latest_timestamp)
-        _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
-            market_start_time = market_rows[time_column].min()
-            market_open_time = _align_market_open(market_start_time)
-            if pd.isna(market_start_time):
-                countdown_display = "N/A"
-            else:
-                market_end_time = market_open_time + pd.Timedelta(minutes=15)
-                remaining_seconds = int((market_end_time - latest_timestamp).total_seconds())
-                remaining_seconds = max(0, remaining_seconds)
-                minutes_left = remaining_seconds // 60
-                seconds_left = remaining_seconds % 60
-                countdown_display = f"{minutes_left:02d}:{seconds_left:02d}"
-            st.metric("Minutes Left (MM:SS)", countdown_display)
-        with col2:
-            st.metric(
-                "Yes (Up) Cost",
-                _format_metric(latest.get("UpPrice"), lambda v: f"${v:.2f}"),
-            )
-        with col3:
-            st.metric(
-                "No (Down) Cost",
-                _format_metric(latest.get("DownPrice"), lambda v: f"${v:.2f}"),
-            )
-
-        # Initialize zoom mode
-        if 'zoom_mode' not in st.session_state:
-            st.session_state.zoom_mode = None
-
-        # Zoom Controls
-        col_z1, col_z2 = st.columns([1, 10])
-        with col_z1:
-            if st.button("Reset Zoom", key='reset_zoom_button'):
-                st.session_state.zoom_mode = None
-        with col_z2:
-            if st.button("Zoom Last 15m", key='zoom_15m_button'):
-                st.session_state.zoom_mode = 'last_15m'
-
-        # Calculate range based on mode
-        current_range = None
-        if st.session_state.zoom_mode == 'last_15m':
-            end_time = df_window[time_column].max()
-            start_time = end_time - pd.Timedelta(minutes=15)
-            current_range = [start_time, end_time]
-
-        trace_mode = "lines+markers" if show_markers else "lines"
-        colors = {
-            "up": "rgba(34, 139, 34, 0.75)",
-            "down": "rgba(220, 20, 60, 0.65)",
-        }
-
-        # Create Subplots with shared x-axis
-        fig = make_subplots(
-            rows=1,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.1,
-            specs=[[{}]],
-            subplot_titles=(
-                "Probability History",
-            ),
-        )
-
-        # Probability Chart (Row 1)
-        fig.add_trace(
-            go.Scatter(
-                x=df_chart[time_column],
-                y=df_chart['UpPrice'],
-                name="Yes (Up)",
-                line=dict(color=colors["up"], width=2, shape="spline", smoothing=1.1),
-                connectgaps=True,
-                mode=trace_mode,
-            ),
-            row=1,
-            col=1,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=df_chart[time_column],
-                y=df_chart['DownPrice'],
-                name="No (Down)",
-                line=dict(color=colors["down"], dash='dash', width=2, shape="spline", smoothing=1.1),
-                connectgaps=True,
-                mode=trace_mode,
-            ),
-            row=1,
-            col=1,
-        )
-
-        ordered_targets = df_window["TargetTime_dt"].dropna().drop_duplicates().tolist()
-        full_target_dt_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
-        trade_records = _calculate_market_trade_records(
-            df_window,
-            time_column,
-            minutes_after_open,
-            entry_threshold,
-            hold_until_close_threshold,
-            target_order=full_target_dt_order,
-        )
-        trade_record_map = {record["target_time_dt"]: record for record in trade_records}
-        entry_times = []
-        entry_prices = []
-        exit_times = []
-        exit_prices = []
-        held_times = []
-        held_prices = []
-
-        for target_time in ordered_targets:
-            market_group = df_window[df_window["TargetTime_dt"] == target_time].sort_values(time_column)
-            if market_group.empty:
-                continue
-            record = trade_record_map.get(target_time)
-            if record is None:
-                continue
-            open_threshold_time = record["open_threshold_time"]
-            if pd.notna(open_threshold_time):
-                add_vline_all_rows(
-                    fig,
-                    open_threshold_time,
-                    line_width=1,
-                    line_dash="solid",
-                    line_color="rgba(200, 200, 200, 0.4)",
-                )
-
-            if record["entry_time"] is not None and record["entry_price"] is not None:
-                entry_times.append(record["entry_time"])
-                entry_prices.append(record["entry_price"])
-
-            if record["exit_time"] is not None and record["exit_price"] is not None:
-                if record["exit_reason"] == "threshold":
-                    exit_times.append(record["exit_time"])
-                    exit_prices.append(record["exit_price"])
-                elif record["exit_reason"] == "held_to_close":
-                    held_times.append(record["exit_time"])
-                    held_prices.append(record["exit_price"])
-
-            if record["outcome"] in {"Win", "Lose", "Tie"}:
-                if record["exit_reason"] == "threshold":
-                    outcome_text = f"{record['outcome']} (exit)"
-                else:
-                    outcome_text = f"{record['outcome']} (close)"
-
-                outcome_color = "#808080" if record["outcome"] == "Tie" else (
-                    "#00AA00" if record["outcome"] == "Win" else "#FF0000"
-                )
-                fig.add_annotation(
-                    x=record["exit_time"] or record["market_close_time"],
-                    y=1.03,
-                    text=outcome_text,
-                    showarrow=False,
-                    font=dict(color=outcome_color, size=16),
-                    row=1,
-                    col=1,
-                )
-
-        if entry_times:
-            fig.add_trace(
-                go.Scatter(
-                    x=entry_times,
-                    y=entry_prices,
-                    mode="markers+text",
-                    marker=dict(color="#1E90FF", size=9),
-                    text=["entry"] * len(entry_times),
-                    textposition="top center",
-                    textfont=dict(size=10, color="#1E90FF"),
-                    name="Entry",
-                    showlegend=False,
-                ),
-                row=1,
-                col=1,
-            )
-        if exit_times:
-            fig.add_trace(
-                go.Scatter(
-                    x=exit_times,
-                    y=exit_prices,
-                    mode="markers+text",
-                    marker=dict(color="#6A5ACD", size=9),
-                    text=["exit"] * len(exit_times),
-                    textposition="top center",
-                    textfont=dict(size=10, color="#6A5ACD"),
-                    name="Exit",
-                    showlegend=False,
-                ),
-                row=1,
-                col=1,
-            )
-        if held_times:
-            fig.add_trace(
-                go.Scatter(
-                    x=held_times,
-                    y=held_prices,
-                    mode="markers+text",
-                    marker=dict(color="#808080", size=9),
-                    text=["held to close"] * len(held_times),
-                    textposition="top center",
-                    textfont=dict(size=10, color="#808080"),
-                    name="Held to close",
-                    showlegend=False,
-                ),
-                row=1,
-                col=1,
-            )
-
-        # Add vertical lines for market transitions to both plots
-        # Identify where TargetTime changes
-        transitions = df_window.loc[df_window['TargetTime'].shift() != df_window['TargetTime'], time_column].iloc[1:]
-
-        for t in transitions:
-            add_vline_all_rows(fig, t, line_width=1, line_dash="dot", line_color="gray")
-
-        # Update Layout
-        fig.update_layout(
-            height=600,
-            template="plotly_white",
-            hovermode="x unified",
-            xaxis_title="Time",
-            yaxis=dict(title="Probability", range=[0, 1.05]),
-            xaxis=dict(rangeslider=dict(visible=False), type="date"),
-        )
-        # Explicitly set range for the chart x-axis.
-        if current_range:
-            fig.update_xaxes(range=current_range, row=1, col=1)
-
-        # Enable crosshair (spike lines) across both subplots
-        fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
-        probability_threshold = float(entry_threshold)
-        minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
-        _update_strike_rate_state(
+        probability_renderer = render_probability_history
+        if st.session_state.get("auto_refresh", False):
+            probability_renderer = st.fragment(run_every=refresh_interval_seconds)(render_probability_history)
+        chart_result = probability_renderer(
+            df,
             history_df,
+            time_column,
             history_time_column,
+            lookback_period,
+            resample_interval,
+            show_markers,
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
-            current_open,
+            jump_container,
         )
-
-        strike_rate = st.session_state.strike_rate
-        avg_entry_price = st.session_state.get("avg_entry_price", np.nan)
-        win_rate_needed = st.session_state.get("win_rate_needed", np.nan)
-        strike_sample_size = st.session_state.get("strike_sample_size")
-        autotune_sample_size = st.session_state.get("autotune_sample_size")
-
-        st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
-
-        def _handle_window_back(offset_limit):
-            st.session_state.window_offset = min(offset_limit, st.session_state.window_offset + 1)
-
-        def _handle_window_forward():
-            st.session_state.window_offset = max(0, st.session_state.window_offset - 1)
-
-        def _handle_window_latest():
-            st.session_state.window_offset = 0
-
-        nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
-        with nav_col1:
-            st.button(
-                "Back",
-                key="window_back_button",
-                disabled=st.session_state.window_offset >= max_offset,
-                on_click=_handle_window_back,
-                args=(max_offset,),
-            )
-        with nav_col2:
-            st.button(
-                "Forward",
-                key="window_forward_button",
-                disabled=st.session_state.window_offset <= 0,
-                on_click=_handle_window_forward,
-            )
-        with nav_col3:
-            st.button(
-                "Latest",
-                key="window_latest_button",
-                disabled=st.session_state.window_offset == 0,
-                on_click=_handle_window_latest,
-            )
-
-        _update_window_summary_state(
+        render_summary_sections(
             history_df,
             history_time_column,
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
             trade_value_usd,
+            test_balance_start,
+            chart_result["summary_reference_time"],
+            chart_result["today_start_time"],
+            chart_result["current_open"],
         )
-
-        profit_loss_trade_records = _calculate_market_trade_records(
-            history_df,
-            history_time_column,
-            minutes_after_open,
-            entry_threshold,
-            hold_until_close_threshold,
-        )
-        closed_trades = build_trade_pnl_records(profit_loss_trade_records, trade_value_usd)
-        profit_loss_summary = summarize_profit_loss(
-            closed_trades,
-            reference_time=summary_reference_time,
-            today_start_time=today_start_time,
-        )
-        drawdown_summary = summarize_drawdowns(
-            closed_trades,
-            reference_time=summary_reference_time,
-            test_balance_start=test_balance_start,
-            today_start_time=today_start_time,
-        )
-        st.subheader("Profit/Loss")
-        pnl_table_col, gauge_col = st.columns([1.4, 1])
-        with pnl_table_col:
-            pnl_table = pd.DataFrame(
-                [
-                    {
-                        "Period": "Today",
-                        "P/L (USD)": _format_metric(
-                            profit_loss_summary["today"],
-                            lambda v: f"${v:,.2f}",
-                        ),
-                        "Max Drawdown %": _format_metric(
-                            drawdown_summary["today"],
-                            lambda v: f"{v * 100:.2f}%",
-                        ),
-                    },
-                    {
-                        "Period": "7-day rolling",
-                        "P/L (USD)": _format_metric(
-                            profit_loss_summary["week_to_date"],
-                            lambda v: f"${v:,.2f}",
-                        ),
-                        "Max Drawdown %": _format_metric(
-                            drawdown_summary["week_to_date"],
-                            lambda v: f"{v * 100:.2f}%",
-                        ),
-                    },
-                    {
-                        "Period": "30-day rolling",
-                        "P/L (USD)": _format_metric(
-                            profit_loss_summary["month_to_date"],
-                            lambda v: f"${v:,.2f}",
-                        ),
-                        "Max Drawdown %": _format_metric(
-                            drawdown_summary["month_to_date"],
-                            lambda v: f"{v * 100:.2f}%",
-                        ),
-                    },
-                    {
-                        "Period": "All Time",
-                        "P/L (USD)": _format_metric(
-                            profit_loss_summary["all_time"],
-                            lambda v: f"${v:,.2f}",
-                        ),
-                        "Max Drawdown %": _format_metric(
-                            None,
-                            lambda v: f"{v * 100:.2f}%",
-                        ),
-                    },
-                ]
-            ).set_index("Period")
-            st.dataframe(pnl_table, width="stretch")
-        with gauge_col:
-            gauge_value = 50 if pd.isna(strike_rate) else strike_rate
-            gauge_value = max(50, min(100, gauge_value))
-            win_rate_needed_pct = 50 if pd.isna(win_rate_needed) else win_rate_needed
-            win_rate_needed_pct = max(50, min(100, win_rate_needed_pct))
-            green_end = win_rate_needed_pct
-            red_start = win_rate_needed_pct
-            gauge_fig = go.Figure(
-                go.Indicator(
-                    mode="gauge+number",
-                    value=gauge_value,
-                    number={"suffix": "%", "valueformat": ".1f"},
-                    title={"text": "Strike Rate"},
-                    gauge={
-                        "shape": "angular",
-                        "axis": {"range": [50, 100]},
-                        "bar": {"color": "rgba(0, 0, 0, 0)"},
-                        "steps": [
-                            {"range": [50, green_end], "color": "red"},
-                            {"range": [red_start, 100], "color": "green"},
-                        ],
-                        "threshold": {
-                            "line": {"color": "black", "width": 3},
-                            "thickness": 0.8,
-                            "value": gauge_value,
-                        },
-                    },
-                )
-            )
-            gauge_fig.update_layout(
-                height=250,
-                margin=dict(l=10, r=10, t=60, b=10),
-            )
-            st.plotly_chart(gauge_fig, width='stretch', config={'displayModeBar': False})
-            average_entry_display = f"{avg_entry_price:.2f}" if not pd.isna(avg_entry_price) else "N/A"
-            win_rate_display = f"{win_rate_needed:.2f}%" if not pd.isna(win_rate_needed) else "N/A"
-            if not pd.isna(strike_rate) and not pd.isna(win_rate_needed):
-                edge_value = strike_rate - win_rate_needed
-                edge_display = f"{edge_value:+.2f}%"
-            else:
-                edge_display = "N/A"
-            if strike_sample_size is not None and autotune_sample_size is not None:
-                st.caption(
-                    f"Samples: autotune={autotune_sample_size}, strike rate={strike_sample_size}"
-                )
-            metrics_container = st.container()
-            with metrics_container:
-                st.metric("Average Entry", average_entry_display)
-                st.metric("Win Rate Needed", win_rate_display)
-                st.metric("Edge", edge_display)
-            autotune_clicked = st.button(
-                "Autotune",
-                key="autotune_button",
-                use_container_width=True,
-            )
-            if autotune_clicked:
-                progress_container = st.empty()
-                status_container = st.status("Autotuning…", expanded=True)
-                progress_bar = progress_container.progress(0)
-                best_result = None
-
-                def _progress_callback(current_step, total_steps, message):
-                    progress_bar.progress(current_step / total_steps)
-                    status_container.write(message)
-
-                with status_container:
-                    def _autotune_metrics(df, column, minutes, threshold, hold_threshold):
-                        return _calculate_strike_rate_metrics(
-                            df,
-                            column,
-                            minutes,
-                            threshold,
-                            hold_threshold,
-                            history_segment="autotune",
-                        )
-
-                    best_result = run_autotune(
-                        history_df,
-                        history_time_column,
-                        _autotune_metrics,
-                        progress_callback=_progress_callback,
-                    )
-                progress_container.empty()
-                status_container.update(state="complete", label="Autotune complete")
-                if best_result:
-                    st.session_state.autotune_result = best_result
-                    st.session_state.autotune_message = None
-                else:
-                    st.session_state.autotune_result = None
-                    st.session_state.autotune_message = "No viable data for autotune"
-            if st.session_state.autotune_result:
-                result = st.session_state.autotune_result
-                st.caption(
-                    "Best: "
-                    f"minutes_after_open={result['minutes_after_open']}, "
-                    f"entry_threshold={result['entry_threshold']:.2f}, "
-                    f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
-                    f"strike_rate={result['strike_rate']:.2f}%, "
-                    f"win_rate_needed={result['win_rate_needed']:.2f}%, "
-                    f"edge={result['edge']:.2f}%"
-                )
-            elif st.session_state.autotune_message:
-                st.caption(st.session_state.autotune_message)
 
         with st.expander("Window summary"):
             summary_df = pd.DataFrame(st.session_state.window_summary_rows)
             st.dataframe(summary_df, width='stretch')
 
-        st.caption(f"Last updated: {latest['Timestamp']}")
+        st.caption(f"Last updated: {chart_result['latest']['Timestamp']}")
 
     else:
         st.warning("No data found yet. Please ensure data_logger.py is running.")
 
-
-if st.session_state.get("auto_refresh", False):
-    render_dashboard = st.fragment(run_every=refresh_interval_seconds)(render_dashboard)
 
 render_dashboard()
