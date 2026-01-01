@@ -1249,9 +1249,17 @@ def render_dashboard():
                 )
             metrics_container = st.container()
             with metrics_container:
-                st.metric("Average Entry", average_entry_display)
-                st.metric("Win Rate Needed", win_rate_display)
-                st.metric("Edge", edge_display)
+                metrics_table = pd.DataFrame(
+                    {
+                        "Metric": ["Average Entry", "Win Rate Needed", "Edge"],
+                        "Value": [
+                            average_entry_display,
+                            win_rate_display,
+                            edge_display,
+                        ],
+                    }
+                )
+                st.table(metrics_table)
             autotune_clicked = st.button(
                 "Autotune",
                 key="autotune_button",
