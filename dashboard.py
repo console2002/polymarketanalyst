@@ -916,6 +916,7 @@ def render_probability_history(
 ):
     df_window = chart_data["df_window"]
     max_offset = chart_data["max_offset"]
+    latest = chart_data["latest"]
 
     # Process data for charts (add gaps between different markets)
     df_chart = df_window.copy().sort_values(time_column)
