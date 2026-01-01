@@ -815,17 +815,11 @@ def _should_recalculate_summary(
     return should_recalculate
 
 
-def render_probability_history(
+def prepare_probability_window(
     df,
-    history_df,
     time_column,
-    history_time_column,
     lookback_period,
     resample_interval,
-    show_markers,
-    minutes_after_open,
-    entry_threshold,
-    hold_until_close_threshold,
     jump_container,
 ):
     if 'window_offset' not in st.session_state:
@@ -875,6 +869,53 @@ def render_probability_history(
 
     # Get latest from windowed data
     latest = df_window.iloc[-1]
+    return {
+        "df_window": df_window,
+        "latest": latest,
+        "max_offset": max_offset,
+        "total_markets": total_markets,
+    }
+
+def build_market_summary_table(df_window, latest, time_column):
+    latest_timestamp = df_window[time_column].max()
+    market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
+    market_start_time = market_rows[time_column].min()
+    market_open_time = _align_market_open(market_start_time)
+    if pd.isna(market_start_time):
+        countdown_display = "N/A"
+    else:
+        market_end_time = market_open_time + pd.Timedelta(minutes=15)
+        remaining_seconds = int((market_end_time - latest_timestamp).total_seconds())
+        remaining_seconds = max(0, remaining_seconds)
+        minutes_left = remaining_seconds // 60
+        seconds_left = remaining_seconds % 60
+        countdown_display = f"{minutes_left:02d}:{seconds_left:02d}"
+    return pd.DataFrame(
+        [
+            {"Metric": "Minutes Left (MM:SS)", "Value": countdown_display},
+            {
+                "Metric": "Yes (Up) Cost",
+                "Value": _format_metric(latest.get("UpPrice"), lambda v: f"${v:.2f}"),
+            },
+            {
+                "Metric": "No (Down) Cost",
+                "Value": _format_metric(latest.get("DownPrice"), lambda v: f"${v:.2f}"),
+            },
+        ]
+    ).set_index("Metric")
+
+
+def render_probability_history(
+    df,
+    chart_data,
+    time_column,
+    show_markers,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+):
+    df_window = chart_data["df_window"]
+    max_offset = chart_data["max_offset"]
 
     # Process data for charts (add gaps between different markets)
     df_chart = df_window.copy().sort_values(time_column)
@@ -892,47 +933,6 @@ def render_probability_history(
         segments.append(gap_row)
 
     df_chart = pd.concat(segments).reset_index(drop=True)
-
-    latest_timestamp = df_window[time_column].max()
-    history_latest_timestamp = (
-        history_df[history_time_column].max()
-        if history_df is not None and not history_df.empty
-        else latest_timestamp
-    )
-    summary_reference_time = df[time_column].max()
-    if pd.isna(summary_reference_time):
-        summary_reference_time = history_latest_timestamp
-    today_start_time = df[time_column].min()
-    if pd.isna(today_start_time):
-        today_start_time = None
-    current_open = _align_market_open(history_latest_timestamp)
-
-    market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
-    market_start_time = market_rows[time_column].min()
-    market_open_time = _align_market_open(market_start_time)
-    if pd.isna(market_start_time):
-        countdown_display = "N/A"
-    else:
-        market_end_time = market_open_time + pd.Timedelta(minutes=15)
-        remaining_seconds = int((market_end_time - latest_timestamp).total_seconds())
-        remaining_seconds = max(0, remaining_seconds)
-        minutes_left = remaining_seconds // 60
-        seconds_left = remaining_seconds % 60
-        countdown_display = f"{minutes_left:02d}:{seconds_left:02d}"
-    market_summary_table = pd.DataFrame(
-        [
-            {"Metric": "Minutes Left (MM:SS)", "Value": countdown_display},
-            {
-                "Metric": "Yes (Up) Cost",
-                "Value": _format_metric(latest.get("UpPrice"), lambda v: f"${v:.2f}"),
-            },
-            {
-                "Metric": "No (Down) Cost",
-                "Value": _format_metric(latest.get("DownPrice"), lambda v: f"${v:.2f}"),
-            },
-        ]
-    ).set_index("Metric")
-    st.dataframe(market_summary_table, width="stretch")
 
     # Initialize zoom mode
     if 'zoom_mode' not in st.session_state:
@@ -1173,14 +1173,12 @@ def render_probability_history(
     return {
         "df_window": df_window,
         "latest": latest,
-        "summary_reference_time": summary_reference_time,
-        "today_start_time": today_start_time,
-        "current_open": current_open,
         "max_offset": max_offset,
+        "total_markets": total_markets,
     }
 
 
-def render_summary_sections(
+def compute_summary_state(
     history_df,
     history_time_column,
     minutes_after_open,
@@ -1267,181 +1265,193 @@ def render_summary_sections(
 
     profit_loss_summary = profit_loss_summary or {}
     drawdown_summary = drawdown_summary or {}
-    strike_col, pnl_col = st.columns([1, 1])
-    with strike_col:
-        gauge_value = 50 if pd.isna(strike_rate) else strike_rate
-        gauge_value = max(50, min(100, gauge_value))
-        win_rate_needed_pct = 50 if pd.isna(win_rate_needed) else win_rate_needed
-        win_rate_needed_pct = max(50, min(100, win_rate_needed_pct))
-        green_end = win_rate_needed_pct
-        red_start = win_rate_needed_pct
-        gauge_fig = go.Figure(
-            go.Indicator(
-                mode="gauge+number",
-                value=gauge_value,
-                number={"suffix": "%", "valueformat": ".1f"},
-                title={"text": "Strike Rate"},
-                gauge={
-                    "shape": "angular",
-                    "axis": {"range": [50, 100]},
-                    "bar": {"color": "rgba(0, 0, 0, 0)"},
-                    "steps": [
-                        {"range": [50, green_end], "color": "red"},
-                        {"range": [red_start, 100], "color": "green"},
-                    ],
-                    "threshold": {
-                        "line": {"color": "black", "width": 3},
-                        "thickness": 0.8,
-                        "value": gauge_value,
-                    },
+    return {
+        "strike_rate": strike_rate,
+        "avg_entry_price": avg_entry_price,
+        "win_rate_needed": win_rate_needed,
+        "strike_sample_size": strike_sample_size,
+        "autotune_sample_size": autotune_sample_size,
+        "profit_loss_summary": profit_loss_summary,
+        "drawdown_summary": drawdown_summary,
+    }
+
+
+def render_strike_rate_section(
+    summary_state,
+    history_df,
+    history_time_column,
+):
+    strike_rate = summary_state["strike_rate"]
+    avg_entry_price = summary_state["avg_entry_price"]
+    win_rate_needed = summary_state["win_rate_needed"]
+    strike_sample_size = summary_state["strike_sample_size"]
+    autotune_sample_size = summary_state["autotune_sample_size"]
+
+    gauge_value = 50 if pd.isna(strike_rate) else strike_rate
+    gauge_value = max(50, min(100, gauge_value))
+    win_rate_needed_pct = 50 if pd.isna(win_rate_needed) else win_rate_needed
+    win_rate_needed_pct = max(50, min(100, win_rate_needed_pct))
+    green_end = win_rate_needed_pct
+    red_start = win_rate_needed_pct
+    gauge_fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=gauge_value,
+            number={"suffix": "%", "valueformat": ".1f"},
+            title={"text": "Strike Rate"},
+            gauge={
+                "shape": "angular",
+                "axis": {"range": [50, 100]},
+                "bar": {"color": "rgba(0, 0, 0, 0)"},
+                "steps": [
+                    {"range": [50, green_end], "color": "red"},
+                    {"range": [red_start, 100], "color": "green"},
+                ],
+                "threshold": {
+                    "line": {"color": "black", "width": 3},
+                    "thickness": 0.8,
+                    "value": gauge_value,
                 },
-            )
+            },
         )
-        gauge_fig.update_layout(
-            height=250,
-            margin=dict(l=10, r=10, t=60, b=10),
+    )
+    gauge_fig.update_layout(
+        height=250,
+        margin=dict(l=10, r=10, t=60, b=10),
+    )
+    st.plotly_chart(gauge_fig, width='stretch', config={'displayModeBar': False})
+    average_entry_display = f"{avg_entry_price:.2f}" if not pd.isna(avg_entry_price) else "N/A"
+    win_rate_display = f"{win_rate_needed:.2f}%" if not pd.isna(win_rate_needed) else "N/A"
+    if not pd.isna(strike_rate) and not pd.isna(win_rate_needed):
+        edge_value = strike_rate - win_rate_needed
+        edge_display = f"{edge_value:+.2f}%"
+    else:
+        edge_display = "N/A"
+    if strike_sample_size is not None and autotune_sample_size is not None:
+        st.caption(
+            f"Samples: autotune={autotune_sample_size}, strike rate={strike_sample_size}"
         )
-        st.plotly_chart(gauge_fig, width='stretch', config={'displayModeBar': False})
-        average_entry_display = f"{avg_entry_price:.2f}" if not pd.isna(avg_entry_price) else "N/A"
-        win_rate_display = f"{win_rate_needed:.2f}%" if not pd.isna(win_rate_needed) else "N/A"
-        if not pd.isna(strike_rate) and not pd.isna(win_rate_needed):
-            edge_value = strike_rate - win_rate_needed
-            edge_display = f"{edge_value:+.2f}%"
-        else:
-            edge_display = "N/A"
-        if strike_sample_size is not None and autotune_sample_size is not None:
-            st.caption(
-                f"Samples: autotune={autotune_sample_size}, strike rate={strike_sample_size}"
-            )
-        metrics_container = st.container()
-        with metrics_container:
-            metrics_table = pd.DataFrame(
-                {
-                    "Metric": ["Average Entry", "Win Rate Needed", "Edge"],
-                    "Value": [
-                        average_entry_display,
-                        win_rate_display,
-                        edge_display,
-                    ],
-                }
-            )
-            st.table(metrics_table)
-        autotune_clicked = st.button(
-            "Autotune",
-            key="autotune_button",
-            use_container_width=True,
+    metrics_container = st.container()
+    with metrics_container:
+        metrics_table = pd.DataFrame(
+            {
+                "Metric": ["Average Entry", "Win Rate Needed", "Edge"],
+                "Value": [
+                    average_entry_display,
+                    win_rate_display,
+                    edge_display,
+                ],
+            }
         )
-        if autotune_clicked:
-            progress_container = st.empty()
-            status_container = st.status("Autotuning…", expanded=True)
-            progress_bar = progress_container.progress(0)
-            best_result = None
+        st.table(metrics_table)
+    autotune_clicked = st.button(
+        "Autotune",
+        key="autotune_button",
+        use_container_width=True,
+    )
+    if autotune_clicked:
+        progress_container = st.empty()
+        status_container = st.status("Autotuning…", expanded=True)
+        progress_bar = progress_container.progress(0)
 
-            def _progress_callback(current_step, total_steps, message):
-                progress_bar.progress(current_step / total_steps)
-                status_container.write(message)
+        def _progress_callback(current_step, total_steps, message):
+            progress_bar.progress(current_step / total_steps)
+            status_container.write(message)
 
-            with status_container:
-                def _autotune_metrics(df, column, minutes, threshold, hold_threshold):
-                    return _calculate_strike_rate_metrics(
-                        df,
-                        column,
-                        minutes,
-                        threshold,
-                        hold_threshold,
-                        history_segment="autotune",
-                    )
-
-                best_result = run_autotune(
-                    history_df,
-                    history_time_column,
-                    _autotune_metrics,
-                    progress_callback=_progress_callback,
+        with status_container:
+            def _autotune_metrics(df, column, minutes, threshold, hold_threshold):
+                return _calculate_strike_rate_metrics(
+                    df,
+                    column,
+                    minutes,
+                    threshold,
+                    hold_threshold,
+                    history_segment="autotune",
                 )
-            progress_container.empty()
-            status_container.update(state="complete", label="Autotune complete")
-            if best_result:
-                st.session_state.autotune_result = best_result
-                st.session_state.autotune_message = None
-            else:
-                st.session_state.autotune_result = None
-                st.session_state.autotune_message = "No viable data for autotune"
-        if st.session_state.autotune_result:
-            result = st.session_state.autotune_result
-            st.caption(
-                "Best: "
-                f"minutes_after_open={result['minutes_after_open']}, "
-                f"entry_threshold={result['entry_threshold']:.2f}, "
-                f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
-                f"strike_rate={result['strike_rate']:.2f}%, "
-                f"win_rate_needed={result['win_rate_needed']:.2f}%, "
-                f"edge={result['edge']:.2f}%"
+
+            best_result = run_autotune(
+                history_df,
+                history_time_column,
+                _autotune_metrics,
+                progress_callback=_progress_callback,
             )
-        elif st.session_state.autotune_message:
-            st.caption(st.session_state.autotune_message)
-    with pnl_col:
-        pnl_table = pd.DataFrame(
-            [
-                {
-                    "Period": "Today",
-                    "P/L (USD)": _format_metric(
-                        profit_loss_summary.get("today"),
-                        lambda v: f"${v:,.2f}",
-                    ),
-                    "Max Drawdown %": _format_metric(
-                        drawdown_summary.get("today"),
-                        lambda v: f"{v * 100:.2f}%",
-                    ),
-                },
-                {
-                    "Period": "7-day rolling",
-                    "P/L (USD)": _format_metric(
-                        profit_loss_summary.get("week_to_date"),
-                        lambda v: f"${v:,.2f}",
-                    ),
-                    "Max Drawdown %": _format_metric(
-                        drawdown_summary.get("week_to_date"),
-                        lambda v: f"{v * 100:.2f}%",
-                    ),
-                },
-                {
-                    "Period": "30-day rolling",
-                    "P/L (USD)": _format_metric(
-                        profit_loss_summary.get("month_to_date"),
-                        lambda v: f"${v:,.2f}",
-                    ),
-                    "Max Drawdown %": _format_metric(
-                        drawdown_summary.get("month_to_date"),
-                        lambda v: f"{v * 100:.2f}%",
-                    ),
-                },
-                {
-                    "Period": "All Time",
-                    "P/L (USD)": _format_metric(
-                        profit_loss_summary.get("all_time"),
-                        lambda v: f"${v:,.2f}",
-                    ),
-                    "Max Drawdown %": _format_metric(
-                        None,
-                        lambda v: f"{v * 100:.2f}%",
-                    ),
-                },
-            ]
-        ).set_index("Period")
-        st.dataframe(pnl_table, width="stretch")
+        progress_container.empty()
+        status_container.update(state="complete", label="Autotune complete")
+        if best_result:
+            st.session_state.autotune_result = best_result
+            st.session_state.autotune_message = None
+        else:
+            st.session_state.autotune_result = None
+            st.session_state.autotune_message = "No viable data for autotune"
+    if st.session_state.autotune_result:
+        result = st.session_state.autotune_result
+        st.caption(
+            "Best: "
+            f"minutes_after_open={result['minutes_after_open']}, "
+            f"entry_threshold={result['entry_threshold']:.2f}, "
+            f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
+            f"strike_rate={result['strike_rate']:.2f}%, "
+            f"win_rate_needed={result['win_rate_needed']:.2f}%, "
+            f"edge={result['edge']:.2f}%"
+        )
+    elif st.session_state.autotune_message:
+        st.caption(st.session_state.autotune_message)
+
+
+def render_profit_loss_section(summary_state):
+    profit_loss_summary = summary_state["profit_loss_summary"] or {}
+    drawdown_summary = summary_state["drawdown_summary"] or {}
+    pnl_table = pd.DataFrame(
+        [
+            {
+                "Period": "Today",
+                "P/L (USD)": _format_metric(
+                    profit_loss_summary.get("today"),
+                    lambda v: f"${v:,.2f}",
+                ),
+                "Max Drawdown %": _format_metric(
+                    drawdown_summary.get("today"),
+                    lambda v: f"{v * 100:.2f}%",
+                ),
+            },
+            {
+                "Period": "7-day rolling",
+                "P/L (USD)": _format_metric(
+                    profit_loss_summary.get("week_to_date"),
+                    lambda v: f"${v:,.2f}",
+                ),
+                "Max Drawdown %": _format_metric(
+                    drawdown_summary.get("week_to_date"),
+                    lambda v: f"{v * 100:.2f}%",
+                ),
+            },
+            {
+                "Period": "30-day rolling",
+                "P/L (USD)": _format_metric(
+                    profit_loss_summary.get("month_to_date"),
+                    lambda v: f"${v:,.2f}",
+                ),
+                "Max Drawdown %": _format_metric(
+                    drawdown_summary.get("month_to_date"),
+                    lambda v: f"{v * 100:.2f}%",
+                ),
+            },
+            {
+                "Period": "All Time",
+                "P/L (USD)": _format_metric(
+                    profit_loss_summary.get("all_time"),
+                    lambda v: f"${v:,.2f}",
+                ),
+                "Max Drawdown %": _format_metric(
+                    None,
+                    lambda v: f"{v * 100:.2f}%",
+                ),
+            },
+        ]
+    ).set_index("Period")
+    st.dataframe(pnl_table, width="stretch")
 
 def render_dashboard():
-    title_col, refresh_col = st.columns([3, 1])
-    with title_col:
-        st.title("Polymarket 8020 Monitor")
-    with refresh_col:
-        st.button("Refresh Data", key="refresh_data_button", width="stretch")
-        st.checkbox(
-            "Auto-refresh",
-            key="auto_refresh",
-            value=st.session_state.get("auto_refresh", False),
-        )
-
     if available_dates:
         selected_date = st.sidebar.date_input(
             "Data date",
@@ -1496,7 +1506,15 @@ def render_dashboard():
             today_start_time = None
         current_open = _align_market_open(history_latest_timestamp)
 
-        render_summary_sections(
+        probability_window = prepare_probability_window(
+            df,
+            time_column,
+            lookback_period,
+            resample_interval,
+            jump_container,
+        )
+
+        summary_state = compute_summary_state(
             history_df,
             history_time_column,
             minutes_after_open,
@@ -1509,21 +1527,41 @@ def render_dashboard():
             current_open,
         )
 
+        header_cols = st.columns([2.2, 3, 2.2])
+        with header_cols[0]:
+            st.title("Polymarket 8020 Monitor")
+            st.button("Refresh Data", key="refresh_data_button", use_container_width=True)
+            st.checkbox(
+                "Auto-refresh",
+                key="auto_refresh",
+                value=st.session_state.get("auto_refresh", False),
+            )
+        with header_cols[1]:
+            render_strike_rate_section(
+                summary_state,
+                history_df,
+                history_time_column,
+            )
+        with header_cols[2]:
+            market_summary_table = build_market_summary_table(
+                probability_window["df_window"],
+                probability_window["latest"],
+                time_column,
+            )
+            st.dataframe(market_summary_table, width="stretch")
+            render_profit_loss_section(summary_state)
+
         probability_renderer = render_probability_history
         if st.session_state.get("auto_refresh", False):
             probability_renderer = st.fragment(run_every=refresh_interval_seconds)(render_probability_history)
         chart_result = probability_renderer(
             df,
-            history_df,
+            probability_window,
             time_column,
-            history_time_column,
-            lookback_period,
-            resample_interval,
             show_markers,
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
-            jump_container,
         )
 
         with st.expander("Window summary"):
