@@ -120,6 +120,14 @@ trade_value_usd = st.sidebar.number_input(
     format="%.2f",
     help="USD value applied to each trade when calculating profit/loss.",
 )
+test_balance_start = st.sidebar.number_input(
+    "Test balance start",
+    min_value=0.0,
+    value=1000.0,
+    step=100.0,
+    format="%.2f",
+    help="Starting balance used for equity curve and drawdown calculations.",
+)
 time_axis = st.sidebar.selectbox(
     "Chart time axis",
     options=("Polymarket Time (ET)", "UK Time"),
@@ -572,7 +580,7 @@ def _find_latest_loss_target(
     return latest_loss_target
 
 
-def _calculate_profit_loss_summary(trade_records, trade_value_usd, reference_time):
+def _collect_closed_trades(trade_records, trade_value_usd):
     closed_trades = []
     for record in trade_records:
         if (
@@ -587,7 +595,10 @@ def _calculate_profit_loss_summary(trade_records, trade_value_usd, reference_tim
             continue
         pnl_usd = (record["exit_price"] - record["entry_price"]) * trade_value_usd
         closed_trades.append({"exit_time": pd.Timestamp(exit_timestamp), "pnl_usd": pnl_usd})
+    return closed_trades
 
+
+def _calculate_profit_loss_summary(closed_trades, reference_time):
     if not closed_trades:
         return {
             "today": np.nan,
@@ -612,6 +623,40 @@ def _calculate_profit_loss_summary(trade_records, trade_value_usd, reference_tim
         "week_to_date": _sum_since(start_of_week),
         "month_to_date": _sum_since(start_of_month),
         "all_time": sum(trade["pnl_usd"] for trade in closed_trades),
+    }
+
+
+def _calculate_drawdown_summary(closed_trades, reference_time, test_balance_start):
+    if not closed_trades:
+        return {
+            "today": np.nan,
+            "week_to_date": np.nan,
+            "month_to_date": np.nan,
+        }
+
+    reference_time = pd.Timestamp(reference_time).normalize()
+    start_of_week = reference_time - pd.Timedelta(days=reference_time.weekday())
+    start_of_month = reference_time.replace(day=1)
+
+    def _max_drawdown_since(start_time):
+        period_trades = [
+            trade for trade in closed_trades if trade["exit_time"] >= start_time
+        ]
+        if not period_trades:
+            return np.nan
+        period_trades = sorted(period_trades, key=lambda trade: trade["exit_time"])
+        pnl_series = pd.Series([trade["pnl_usd"] for trade in period_trades])
+        equity = test_balance_start + pnl_series.cumsum()
+        equity = pd.concat([pd.Series([test_balance_start]), equity], ignore_index=True)
+        rolling_peak = equity.cummax()
+        rolling_peak = rolling_peak.replace(0, np.nan)
+        drawdowns = (rolling_peak - equity) / rolling_peak
+        return drawdowns.max()
+
+    return {
+        "today": _max_drawdown_since(reference_time),
+        "week_to_date": _max_drawdown_since(start_of_week),
+        "month_to_date": _max_drawdown_since(start_of_month),
     }
 
 
@@ -1269,10 +1314,15 @@ def render_dashboard():
             entry_threshold,
             hold_until_close_threshold,
         )
+        closed_trades = _collect_closed_trades(profit_loss_trade_records, trade_value_usd)
         profit_loss_summary = _calculate_profit_loss_summary(
-            profit_loss_trade_records,
-            trade_value_usd,
+            closed_trades,
             reference_time=history_latest_timestamp,
+        )
+        drawdown_summary = _calculate_drawdown_summary(
+            closed_trades,
+            reference_time=history_latest_timestamp,
+            test_balance_start=test_balance_start,
         )
         st.subheader("Profit/Loss")
         pnl_col1, pnl_col2, pnl_col3, pnl_col4 = st.columns(4)
@@ -1284,6 +1334,23 @@ def render_dashboard():
             st.metric("Month-to-date", _format_metric(profit_loss_summary["month_to_date"], lambda v: f"${v:,.2f}"))
         with pnl_col4:
             st.metric("All Time", _format_metric(profit_loss_summary["all_time"], lambda v: f"${v:,.2f}"))
+
+        drawdown_col1, drawdown_col2, drawdown_col3 = st.columns(3)
+        with drawdown_col1:
+            st.metric(
+                "Max Drawdown % (Today)",
+                _format_metric(drawdown_summary["today"], lambda v: f"{v * 100:.2f}%"),
+            )
+        with drawdown_col2:
+            st.metric(
+                "Max Drawdown % (Week-to-date)",
+                _format_metric(drawdown_summary["week_to_date"], lambda v: f"{v * 100:.2f}%"),
+            )
+        with drawdown_col3:
+            st.metric(
+                "Max Drawdown % (Month-to-date)",
+                _format_metric(drawdown_summary["month_to_date"], lambda v: f"{v * 100:.2f}%"),
+            )
 
         with st.expander("Window summary"):
             summary_df = pd.DataFrame(st.session_state.window_summary_rows)
