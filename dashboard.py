@@ -1122,41 +1122,6 @@ def render_dashboard():
         strike_sample_size = st.session_state.get("strike_sample_size")
         autotune_sample_size = st.session_state.get("autotune_sample_size")
 
-        st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
-
-        def _handle_window_back(offset_limit):
-            st.session_state.window_offset = min(offset_limit, st.session_state.window_offset + 1)
-
-        def _handle_window_forward():
-            st.session_state.window_offset = max(0, st.session_state.window_offset - 1)
-
-        def _handle_window_latest():
-            st.session_state.window_offset = 0
-
-        nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
-        with nav_col1:
-            st.button(
-                "Back",
-                key="window_back_button",
-                disabled=st.session_state.window_offset >= max_offset,
-                on_click=_handle_window_back,
-                args=(max_offset,),
-            )
-        with nav_col2:
-            st.button(
-                "Forward",
-                key="window_forward_button",
-                disabled=st.session_state.window_offset <= 0,
-                on_click=_handle_window_forward,
-            )
-        with nav_col3:
-            st.button(
-                "Latest",
-                key="window_latest_button",
-                disabled=st.session_state.window_offset == 0,
-                on_click=_handle_window_latest,
-            )
-
         _update_window_summary_state(
             history_df,
             history_time_column,
@@ -1340,6 +1305,41 @@ def render_dashboard():
                 )
             elif st.session_state.autotune_message:
                 st.caption(st.session_state.autotune_message)
+
+        st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
+
+        def _handle_window_back(offset_limit):
+            st.session_state.window_offset = min(offset_limit, st.session_state.window_offset + 1)
+
+        def _handle_window_forward():
+            st.session_state.window_offset = max(0, st.session_state.window_offset - 1)
+
+        def _handle_window_latest():
+            st.session_state.window_offset = 0
+
+        nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
+        with nav_col1:
+            st.button(
+                "Back",
+                key="window_back_button",
+                disabled=st.session_state.window_offset >= max_offset,
+                on_click=_handle_window_back,
+                args=(max_offset,),
+            )
+        with nav_col2:
+            st.button(
+                "Forward",
+                key="window_forward_button",
+                disabled=st.session_state.window_offset <= 0,
+                on_click=_handle_window_forward,
+            )
+        with nav_col3:
+            st.button(
+                "Latest",
+                key="window_latest_button",
+                disabled=st.session_state.window_offset == 0,
+                on_click=_handle_window_latest,
+            )
 
         with st.expander("Window summary"):
             summary_df = pd.DataFrame(st.session_state.window_summary_rows)
