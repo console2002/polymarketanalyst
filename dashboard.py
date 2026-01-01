@@ -726,13 +726,12 @@ def prepare_probability_window(
         st.warning("No data available after resampling.")
         st.stop()
 
-    # Get latest from windowed data
     latest = df_window.iloc[-1]
     return {
         "df_window": df_window,
         "latest": latest,
         "max_offset": max_offset,
-        "total_markets": chart_data.get("total_markets"),
+        "total_markets": total_markets,
     }
 
 def build_market_summary_table(df_window, latest, time_column):
@@ -1035,7 +1034,7 @@ def render_probability_history(
         "df_window": df_window,
         "latest": latest,
         "max_offset": max_offset,
-        "total_markets": total_markets,
+        "total_markets": chart_data["total_markets"],
     }
 
 
