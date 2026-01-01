@@ -7,6 +7,11 @@ from plotly.subplots import make_subplots
 import datetime
 import re
 from autotune import run_autotune
+from dashboard_metrics import (
+    build_trade_pnl_records,
+    summarize_drawdowns,
+    summarize_profit_loss,
+)
 
 
 # Get the directory of the current script
@@ -490,6 +495,7 @@ def _calculate_window_summary(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    trade_value_usd,
 ):
     summary_rows = []
     loss_targets = []
@@ -521,7 +527,7 @@ def _calculate_window_summary(
             and not pd.isna(record["entry_price"])
             and not pd.isna(record["exit_price"])
         ):
-            pnl_usd = record["exit_price"] - record["entry_price"]
+            pnl_usd = (record["exit_price"] - record["entry_price"]) * trade_value_usd
 
         summary_rows.append(
             {
@@ -552,6 +558,7 @@ def _find_latest_loss_target(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    trade_value_usd,
 ):
     _, latest_loss_target = _calculate_window_summary(
         df,
@@ -559,88 +566,9 @@ def _find_latest_loss_target(
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
+        trade_value_usd,
     )
     return latest_loss_target
-
-
-def _collect_closed_trades(trade_records, trade_value_usd):
-    closed_trades = []
-    for record in trade_records:
-        if (
-            record["entry_price"] is None
-            or record["exit_price"] is None
-            or pd.isna(record["entry_price"])
-            or pd.isna(record["exit_price"])
-        ):
-            continue
-        exit_timestamp = record["exit_time"] or record["market_close_time"]
-        if exit_timestamp is None or pd.isna(exit_timestamp):
-            continue
-        pnl_usd = (record["exit_price"] - record["entry_price"]) * trade_value_usd
-        closed_trades.append({"exit_time": pd.Timestamp(exit_timestamp), "pnl_usd": pnl_usd})
-    return closed_trades
-
-
-def _calculate_profit_loss_summary(closed_trades, reference_time):
-    if not closed_trades:
-        return {
-            "today": np.nan,
-            "week_to_date": np.nan,
-            "month_to_date": np.nan,
-            "all_time": np.nan,
-        }
-
-    reference_time = pd.Timestamp(reference_time).normalize()
-    start_of_week = reference_time - pd.Timedelta(days=reference_time.weekday())
-    start_of_month = reference_time.replace(day=1)
-
-    def _sum_since(start_time):
-        return sum(
-            trade["pnl_usd"]
-            for trade in closed_trades
-            if trade["exit_time"] >= start_time
-        )
-
-    return {
-        "today": _sum_since(reference_time),
-        "week_to_date": _sum_since(start_of_week),
-        "month_to_date": _sum_since(start_of_month),
-        "all_time": sum(trade["pnl_usd"] for trade in closed_trades),
-    }
-
-
-def _calculate_drawdown_summary(closed_trades, reference_time, test_balance_start):
-    if not closed_trades:
-        return {
-            "today": np.nan,
-            "week_to_date": np.nan,
-            "month_to_date": np.nan,
-        }
-
-    reference_time = pd.Timestamp(reference_time).normalize()
-    start_of_week = reference_time - pd.Timedelta(days=reference_time.weekday())
-    start_of_month = reference_time.replace(day=1)
-
-    def _max_drawdown_since(start_time):
-        period_trades = [
-            trade for trade in closed_trades if trade["exit_time"] >= start_time
-        ]
-        if not period_trades:
-            return np.nan
-        period_trades = sorted(period_trades, key=lambda trade: trade["exit_time"])
-        pnl_series = pd.Series([trade["pnl_usd"] for trade in period_trades])
-        equity = test_balance_start + pnl_series.cumsum()
-        equity = pd.concat([pd.Series([test_balance_start]), equity], ignore_index=True)
-        rolling_peak = equity.cummax()
-        rolling_peak = rolling_peak.replace(0, np.nan)
-        drawdowns = (rolling_peak - equity) / rolling_peak
-        return drawdowns.max()
-
-    return {
-        "today": _max_drawdown_since(reference_time),
-        "week_to_date": _max_drawdown_since(start_of_week),
-        "month_to_date": _max_drawdown_since(start_of_month),
-    }
 
 
 def _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold):
@@ -764,6 +692,7 @@ def _update_window_summary_state(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    trade_value_usd,
 ):
     _initialize_window_summary_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
     minutes_after_open_changed = (
@@ -789,6 +718,7 @@ def _update_window_summary_state(
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
+            trade_value_usd,
         )
         if latest_loss_target is not None:
             last_loss_target = st.session_state.window_summary_last_loss_target
@@ -806,6 +736,7 @@ def _update_window_summary_state(
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
+            trade_value_usd,
         )
         st.session_state.window_summary_rows = summary_rows
         st.session_state.window_summary_last_loss_target = latest_loss_target
@@ -823,7 +754,7 @@ def render_dashboard():
         st.checkbox(
             "Auto-refresh",
             key="auto_refresh",
-            value=st.session_state.get("auto_refresh", True),
+            value=st.session_state.get("auto_refresh", False),
         )
     with date_col:
         if available_dates:
@@ -1331,6 +1262,7 @@ def render_dashboard():
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
+            trade_value_usd,
         )
 
         profit_loss_trade_records = _calculate_market_trade_records(
@@ -1340,12 +1272,12 @@ def render_dashboard():
             entry_threshold,
             hold_until_close_threshold,
         )
-        closed_trades = _collect_closed_trades(profit_loss_trade_records, trade_value_usd)
-        profit_loss_summary = _calculate_profit_loss_summary(
+        closed_trades = build_trade_pnl_records(profit_loss_trade_records, trade_value_usd)
+        profit_loss_summary = summarize_profit_loss(
             closed_trades,
             reference_time=history_latest_timestamp,
         )
-        drawdown_summary = _calculate_drawdown_summary(
+        drawdown_summary = summarize_drawdowns(
             closed_trades,
             reference_time=history_latest_timestamp,
             test_balance_start=test_balance_start,
@@ -1388,7 +1320,7 @@ def render_dashboard():
         st.warning("No data found yet. Please ensure data_logger.py is running.")
 
 
-if st.session_state.get("auto_refresh", True):
+if st.session_state.get("auto_refresh", False):
     render_dashboard = st.fragment(run_every=refresh_interval_seconds)(render_dashboard)
 
 render_dashboard()
