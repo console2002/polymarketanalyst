@@ -869,6 +869,17 @@ def render_dashboard():
             if history_df is not None and not history_df.empty
             else latest_timestamp
         )
+        selected_latest_timestamp = df[time_column].max()
+        summary_reference_time = (
+            selected_latest_timestamp if pd.notna(selected_latest_timestamp) else history_latest_timestamp
+        )
+        today_start_time = df[time_column].min()
+        if pd.notna(today_start_time):
+            today_start_time = pd.Timestamp(today_start_time).normalize()
+        elif summary_reference_time is not None and pd.notna(summary_reference_time):
+            today_start_time = pd.Timestamp(summary_reference_time).normalize()
+        else:
+            today_start_time = None
         current_open = _align_market_open(history_latest_timestamp)
         _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
 
@@ -1275,12 +1286,14 @@ def render_dashboard():
         closed_trades = build_trade_pnl_records(profit_loss_trade_records, trade_value_usd)
         profit_loss_summary = summarize_profit_loss(
             closed_trades,
-            reference_time=history_latest_timestamp,
+            reference_time=summary_reference_time,
+            today_start_time=today_start_time,
         )
         drawdown_summary = summarize_drawdowns(
             closed_trades,
-            reference_time=history_latest_timestamp,
+            reference_time=summary_reference_time,
             test_balance_start=test_balance_start,
+            today_start_time=today_start_time,
         )
         st.subheader("Profit/Loss")
         pnl_col1, pnl_col2, pnl_col3, pnl_col4 = st.columns(4)
