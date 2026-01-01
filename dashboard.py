@@ -103,29 +103,7 @@ resample_interval = st.sidebar.selectbox(
     options=("1s", "5s", "15s", "30s", "60s", "all"),
     index=1,
 )
-liquidity_aggregation = st.sidebar.selectbox(
-    "Liquidity aggregation",
-    options=("sum", "mean"),
-    index=0,
-)
-liquidity_y_scale = st.sidebar.selectbox(
-    "Liquidity y-scale",
-    options=("linear", "log"),
-    index=0,
-)
-liquidity_bar_mode = st.sidebar.selectbox(
-    "Liquidity bar mode",
-    options=("group", "stack"),
-    index=0,
-)
 show_markers = st.sidebar.checkbox("Show markers", value=True)
-momentum_window_seconds = st.sidebar.number_input(
-    "Rolling window seconds for momentum",
-    min_value=1,
-    max_value=600,
-    value=60,
-    step=5,
-)
 refresh_interval_seconds = st.sidebar.number_input(
     "Auto-refresh interval (seconds)",
     min_value=1,
@@ -252,10 +230,9 @@ with col_top2:
         st.caption("No dated CSV files found; using legacy data file if available.")
 
 
-def _resample_market_data(df, time_column, interval, liquidity_aggregation):
+def _resample_market_data(df, time_column, interval):
     if df.empty or not interval or interval == "all":
         return df
-    volume_agg = "sum" if liquidity_aggregation == "sum" else "mean"
     resampled_groups = []
     for target_time, group in df.groupby("TargetTime", sort=False):
         if group.empty:
@@ -265,8 +242,8 @@ def _resample_market_data(df, time_column, interval, liquidity_aggregation):
             {
                 "UpPrice": "last",
                 "DownPrice": "last",
-                "UpVol": volume_agg,
-                "DownVol": volume_agg,
+                "UpVol": "sum",
+                "DownVol": "sum",
             }
         )
         resampled["TargetTime"] = target_time
@@ -292,17 +269,6 @@ def _last_non_zero(series):
     if cleaned.empty:
         return np.nan
     return cleaned.iloc[-1]
-
-def _infer_interval_seconds(timestamp_series):
-    cleaned = timestamp_series.dropna().sort_values()
-    diffs = cleaned.diff().dropna()
-    if diffs.empty:
-        return 1
-    median_seconds = diffs.median().total_seconds()
-    if np.isnan(median_seconds) or median_seconds <= 0:
-        return 1
-    return max(1, int(round(median_seconds)))
-
 
 def _align_market_open(timestamp):
     if timestamp is None or pd.isna(timestamp):
@@ -851,7 +817,7 @@ def render_dashboard():
             st.warning("No data available for the selected window.")
             st.stop()
 
-        df_window = _resample_market_data(df_window, time_column, resample_interval, liquidity_aggregation)
+        df_window = _resample_market_data(df_window, time_column, resample_interval)
 
         if df_window.empty:
             st.warning("No data available after resampling.")
@@ -877,31 +843,6 @@ def render_dashboard():
 
         df_chart = pd.concat(segments).reset_index(drop=True)
 
-        df_chart["total_liq"] = df_chart["UpVol"] + df_chart["DownVol"]
-        df_chart["liq_imbalance"] = np.where(
-            df_chart["total_liq"] > 0,
-            (df_chart["UpVol"] - df_chart["DownVol"]) / df_chart["total_liq"],
-            np.nan,
-        )
-
-        df_chart["liq_imbalance_volume"] = df_chart["UpVol"] - df_chart["DownVol"]
-        df_chart["liq_share"] = np.where(
-            df_chart["total_liq"] > 0,
-            df_chart["UpVol"] / df_chart["total_liq"],
-            np.nan,
-        )
-
-        if resample_interval == "all":
-            interval_seconds = _infer_interval_seconds(df_chart[time_column])
-        else:
-            interval_seconds = pd.Timedelta(resample_interval).total_seconds()
-        momentum_window_points = max(1, int(momentum_window_seconds / interval_seconds))
-
-        df_chart["UpPrice_Momentum"] = (
-            df_chart.groupby("group")["UpPrice"]
-            .transform(lambda x: x.diff().rolling(momentum_window_points, min_periods=1).mean())
-        )
-
         latest_timestamp = df_window[time_column].max()
         history_latest_timestamp = (
             history_df[history_time_column].max()
@@ -911,14 +852,7 @@ def render_dashboard():
         current_open = _align_market_open(history_latest_timestamp)
         _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
 
-        latest_up_vol = latest.get("UpVol")
-        latest_down_vol = latest.get("DownVol")
-        total_liquidity = latest_up_vol + latest_down_vol
-        liquidity_imbalance = np.nan
-        if pd.notna(total_liquidity) and total_liquidity > 0:
-            liquidity_imbalance = (latest_up_vol - latest_down_vol) / total_liquidity
-
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3 = st.columns(3)
         with col1:
             market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
             market_start_time = market_rows[time_column].min()
@@ -935,20 +869,10 @@ def render_dashboard():
             st.metric("Minutes Left (MM:SS)", countdown_display)
         with col2:
             st.metric(
-                "Total Liquidity",
-                _format_metric(total_liquidity, lambda v: f"{v:,.2f}"),
-            )
-        with col3:
-            st.metric(
-                "Liquidity Imbalance",
-                _format_metric(liquidity_imbalance, lambda v: f"{v:.2%}"),
-            )
-        with col4:
-            st.metric(
                 "Yes (Up) Cost",
                 _format_metric(latest.get("UpPrice"), lambda v: f"${v:.2f}"),
             )
-        with col5:
+        with col3:
             st.metric(
                 "No (Down) Cost",
                 _format_metric(latest.get("DownPrice"), lambda v: f"${v:.2f}"),
@@ -978,24 +902,17 @@ def render_dashboard():
         colors = {
             "up": "rgba(34, 139, 34, 0.75)",
             "down": "rgba(220, 20, 60, 0.65)",
-            "up_liquidity": "rgba(34, 139, 34, 0.9)",
-            "down_liquidity": "rgba(220, 20, 60, 0.85)",
-            "imbalance": "rgba(128, 0, 128, 0.55)",
-            "share": "rgba(255, 165, 0, 0.85)",
-            "momentum": "rgba(30, 144, 255, 0.7)",
         }
 
         # Create Subplots with shared x-axis
         fig = make_subplots(
-            rows=3,
+            rows=1,
             cols=1,
             shared_xaxes=True,
             vertical_spacing=0.1,
-            specs=[[{}], [{}], [{"secondary_y": True}]],
+            specs=[[{}]],
             subplot_titles=(
                 "Probability History",
-                "Liquidity (available size at quoted price)",
-                "Liquidity Imbalance / Share",
             ),
         )
 
@@ -1023,85 +940,6 @@ def render_dashboard():
             ),
             row=1,
             col=1,
-        )
-
-        liquidity_hover = (
-            "Time: %{x}<br>"
-            "Up liq: %{customdata[0]:,.2f}<br>"
-            "Down liq: %{customdata[1]:,.2f}<br>"
-            "Total liq: %{customdata[2]:,.2f}<br>"
-            "Imbalance: %{customdata[3]:.2%}"
-            "<extra></extra>"
-        )
-
-        liquidity_customdata = np.column_stack((
-            df_chart["UpVol"],
-            df_chart["DownVol"],
-            df_chart["total_liq"],
-            df_chart["liq_imbalance"],
-        ))
-
-        # Liquidity Chart (Row 2)
-        fig.add_trace(
-            go.Bar(
-                x=df_chart[time_column],
-                y=df_chart['UpVol'],
-                name="Yes (Up) Liquidity",
-                marker_color=colors["up_liquidity"],
-                customdata=liquidity_customdata,
-                hovertemplate=liquidity_hover,
-            ),
-            row=2,
-            col=1,
-        )
-        fig.add_trace(
-            go.Bar(
-                x=df_chart[time_column],
-                y=df_chart['DownVol'],
-                name="No (Down) Liquidity",
-                marker_color=colors["down_liquidity"],
-                customdata=liquidity_customdata,
-                hovertemplate=liquidity_hover,
-            ),
-            row=2,
-            col=1,
-        )
-
-        # Liquidity Imbalance/Share Chart (Row 3)
-        fig.add_trace(
-            go.Bar(
-                x=df_chart[time_column],
-                y=df_chart["liq_imbalance_volume"],
-                name="Liquidity Imbalance (Up - Down)",
-                marker_color=colors["imbalance"],
-            ),
-            row=3,
-            col=1,
-            secondary_y=False,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=df_chart[time_column],
-                y=df_chart["liq_share"],
-                name="Up Liquidity Share",
-                line=dict(color=colors["share"], width=2),
-                mode=trace_mode,
-            ),
-            row=3,
-            col=1,
-            secondary_y=True,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=df_chart[time_column],
-                y=df_chart["UpPrice_Momentum"],
-                name="Up Price Momentum",
-                line=dict(color=colors["momentum"], width=2, dash="dot"),
-                mode=trace_mode,
-            ),
-            row=3,
-            col=1,
-            secondary_y=True,
         )
 
         ordered_targets = df_window["TargetTime_dt"].dropna().drop_duplicates().tolist()
@@ -1228,24 +1066,16 @@ def render_dashboard():
 
         # Update Layout
         fig.update_layout(
-            height=1000,
+            height=600,
             template="plotly_white",
             hovermode="x unified",
             xaxis_title="Time",
             yaxis=dict(title="Probability", range=[0, 1.05]),
-            yaxis2=dict(title="Liquidity (available size at quoted price)", type=liquidity_y_scale),
-            yaxis3=dict(title="Liquidity Imbalance (Up - Down)", zeroline=True),
-            yaxis4=dict(title="Up Liquidity Share / Momentum"),
-            barmode=liquidity_bar_mode,
             xaxis=dict(rangeslider=dict(visible=False), type="date"),
-            xaxis2=dict(rangeslider=dict(visible=False), type="date"),
-            xaxis3=dict(rangeslider=dict(visible=True), type="date")
         )
-        # Explicitly set range for xaxis1 and xaxis2 (main and shared x-axes)
+        # Explicitly set range for the chart x-axis.
         if current_range:
             fig.update_xaxes(range=current_range, row=1, col=1)
-            fig.update_xaxes(range=current_range, row=2, col=1)
-            fig.update_xaxes(range=current_range, row=3, col=1)
 
         # Enable crosshair (spike lines) across both subplots
         fig.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=True, spikedash='dash')
