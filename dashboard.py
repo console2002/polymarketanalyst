@@ -112,6 +112,14 @@ refresh_interval_seconds = st.sidebar.number_input(
     step=1,
     help="Controls the sleep duration for the auto-refresh loop.",
 )
+trade_value_usd = st.sidebar.number_input(
+    "Trade value (USD)",
+    min_value=0.0,
+    value=5.0,
+    step=0.5,
+    format="%.2f",
+    help="USD value applied to each trade when calculating profit/loss.",
+)
 time_axis = st.sidebar.selectbox(
     "Chart time axis",
     options=("Polymarket Time (ET)", "UK Time"),
@@ -562,6 +570,49 @@ def _find_latest_loss_target(
         hold_until_close_threshold,
     )
     return latest_loss_target
+
+
+def _calculate_profit_loss_summary(trade_records, trade_value_usd, reference_time):
+    closed_trades = []
+    for record in trade_records:
+        if (
+            record["entry_price"] is None
+            or record["exit_price"] is None
+            or pd.isna(record["entry_price"])
+            or pd.isna(record["exit_price"])
+        ):
+            continue
+        exit_timestamp = record["exit_time"] or record["market_close_time"]
+        if exit_timestamp is None or pd.isna(exit_timestamp):
+            continue
+        pnl_usd = (record["exit_price"] - record["entry_price"]) * trade_value_usd
+        closed_trades.append({"exit_time": pd.Timestamp(exit_timestamp), "pnl_usd": pnl_usd})
+
+    if not closed_trades:
+        return {
+            "today": np.nan,
+            "week_to_date": np.nan,
+            "month_to_date": np.nan,
+            "all_time": np.nan,
+        }
+
+    reference_time = pd.Timestamp(reference_time).normalize()
+    start_of_week = reference_time - pd.Timedelta(days=reference_time.weekday())
+    start_of_month = reference_time.replace(day=1)
+
+    def _sum_since(start_time):
+        return sum(
+            trade["pnl_usd"]
+            for trade in closed_trades
+            if trade["exit_time"] >= start_time
+        )
+
+    return {
+        "today": _sum_since(reference_time),
+        "week_to_date": _sum_since(start_of_week),
+        "month_to_date": _sum_since(start_of_month),
+        "all_time": sum(trade["pnl_usd"] for trade in closed_trades),
+    }
 
 
 def _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold):
@@ -1210,6 +1261,29 @@ def render_dashboard():
             entry_threshold,
             hold_until_close_threshold,
         )
+
+        profit_loss_trade_records = _calculate_market_trade_records(
+            history_df,
+            history_time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+        )
+        profit_loss_summary = _calculate_profit_loss_summary(
+            profit_loss_trade_records,
+            trade_value_usd,
+            reference_time=history_latest_timestamp,
+        )
+        st.subheader("Profit/Loss")
+        pnl_col1, pnl_col2, pnl_col3, pnl_col4 = st.columns(4)
+        with pnl_col1:
+            st.metric("Today", _format_metric(profit_loss_summary["today"], lambda v: f"${v:,.2f}"))
+        with pnl_col2:
+            st.metric("Week-to-date", _format_metric(profit_loss_summary["week_to_date"], lambda v: f"${v:,.2f}"))
+        with pnl_col3:
+            st.metric("Month-to-date", _format_metric(profit_loss_summary["month_to_date"], lambda v: f"${v:,.2f}"))
+        with pnl_col4:
+            st.metric("All Time", _format_metric(profit_loss_summary["all_time"], lambda v: f"${v:,.2f}"))
 
         with st.expander("Window summary"):
             summary_df = pd.DataFrame(st.session_state.window_summary_rows)
