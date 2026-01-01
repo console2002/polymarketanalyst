@@ -69,7 +69,7 @@ def _resolve_data_file(selected_date, files_by_date, legacy_path):
     return legacy_path, None
 
 
-st.set_page_config(page_title="Polymarket BTC Monitor", layout="wide")
+st.set_page_config(page_title="Polymarket 8020 Monitor", layout="wide")
 
 st.sidebar.header("Analysis Controls")
 lookback_period = st.sidebar.number_input(
@@ -746,9 +746,9 @@ def _update_window_summary_state(
         st.session_state.window_summary_hold_until_close_threshold = hold_until_close_threshold
 
 def render_dashboard():
-    title_col, refresh_col, date_col, jump_col = st.columns([2.5, 1.1, 1.2, 1.6])
+    title_col, refresh_col = st.columns([3, 1])
     with title_col:
-        st.title("Polymarket 15m BTC Monitor")
+        st.title("Polymarket 8020 Monitor")
     with refresh_col:
         st.button("Refresh Data", key="refresh_data_button", width="stretch")
         st.checkbox(
@@ -756,20 +756,20 @@ def render_dashboard():
             key="auto_refresh",
             value=st.session_state.get("auto_refresh", False),
         )
-    with date_col:
-        if available_dates:
-            selected_date = st.date_input(
-                "Data date",
-                value=latest_available_date,
-                min_value=min_available_date,
-                max_value=latest_available_date,
-                help="Select a historical data file by date. Defaults to the latest available file.",
-            )
-        else:
-            selected_date = None
-            st.caption("No dated CSV files found; using legacy data file if available.")
-    with jump_col:
-        jump_container = st.container()
+
+    if available_dates:
+        selected_date = st.sidebar.date_input(
+            "Data date",
+            value=latest_available_date,
+            min_value=min_available_date,
+            max_value=latest_available_date,
+            help="Select a historical data file by date. Defaults to the latest available file.",
+        )
+    else:
+        selected_date = None
+        st.sidebar.caption("No dated CSV files found; using legacy data file if available.")
+
+    jump_container = st.sidebar.container()
 
     df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
     history_df = load_all_data(files_by_date, legacy_path)
@@ -1116,9 +1116,119 @@ def render_dashboard():
         strike_sample_size = st.session_state.get("strike_sample_size")
         autotune_sample_size = st.session_state.get("autotune_sample_size")
 
-        chart_col, gauge_col = st.columns([4, 1])
-        with chart_col:
-            st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
+        st.plotly_chart(fig, width='stretch', config={'scrollZoom': True})
+
+        def _handle_window_back(offset_limit):
+            st.session_state.window_offset = min(offset_limit, st.session_state.window_offset + 1)
+
+        def _handle_window_forward():
+            st.session_state.window_offset = max(0, st.session_state.window_offset - 1)
+
+        def _handle_window_latest():
+            st.session_state.window_offset = 0
+
+        nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
+        with nav_col1:
+            st.button(
+                "Back",
+                key="window_back_button",
+                disabled=st.session_state.window_offset >= max_offset,
+                on_click=_handle_window_back,
+                args=(max_offset,),
+            )
+        with nav_col2:
+            st.button(
+                "Forward",
+                key="window_forward_button",
+                disabled=st.session_state.window_offset <= 0,
+                on_click=_handle_window_forward,
+            )
+        with nav_col3:
+            st.button(
+                "Latest",
+                key="window_latest_button",
+                disabled=st.session_state.window_offset == 0,
+                on_click=_handle_window_latest,
+            )
+
+        _update_window_summary_state(
+            history_df,
+            history_time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+            trade_value_usd,
+        )
+
+        profit_loss_trade_records = _calculate_market_trade_records(
+            history_df,
+            history_time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+        )
+        closed_trades = build_trade_pnl_records(profit_loss_trade_records, trade_value_usd)
+        profit_loss_summary = summarize_profit_loss(
+            closed_trades,
+            reference_time=history_latest_timestamp,
+        )
+        drawdown_summary = summarize_drawdowns(
+            closed_trades,
+            reference_time=history_latest_timestamp,
+            test_balance_start=test_balance_start,
+        )
+        st.subheader("Profit/Loss")
+        pnl_table_col, gauge_col = st.columns([1.4, 1])
+        with pnl_table_col:
+            pnl_table = pd.DataFrame(
+                [
+                    {
+                        "Period": "Today",
+                        "P/L (USD)": _format_metric(
+                            profit_loss_summary["today"],
+                            lambda v: f"${v:,.2f}",
+                        ),
+                        "Max Drawdown %": _format_metric(
+                            drawdown_summary["today"],
+                            lambda v: f"{v * 100:.2f}%",
+                        ),
+                    },
+                    {
+                        "Period": "7-day rolling",
+                        "P/L (USD)": _format_metric(
+                            profit_loss_summary["week_to_date"],
+                            lambda v: f"${v:,.2f}",
+                        ),
+                        "Max Drawdown %": _format_metric(
+                            drawdown_summary["week_to_date"],
+                            lambda v: f"{v * 100:.2f}%",
+                        ),
+                    },
+                    {
+                        "Period": "30-day rolling",
+                        "P/L (USD)": _format_metric(
+                            profit_loss_summary["month_to_date"],
+                            lambda v: f"${v:,.2f}",
+                        ),
+                        "Max Drawdown %": _format_metric(
+                            drawdown_summary["month_to_date"],
+                            lambda v: f"{v * 100:.2f}%",
+                        ),
+                    },
+                    {
+                        "Period": "All Time",
+                        "P/L (USD)": _format_metric(
+                            profit_loss_summary["all_time"],
+                            lambda v: f"${v:,.2f}",
+                        ),
+                        "Max Drawdown %": _format_metric(
+                            None,
+                            lambda v: f"{v * 100:.2f}%",
+                        ),
+                    },
+                ]
+            ).set_index("Period")
+            st.dataframe(pnl_table, width="stretch")
         with gauge_col:
             gauge_value = 50 if pd.isna(strike_rate) else strike_rate
             gauge_value = max(50, min(100, gauge_value))
@@ -1222,93 +1332,6 @@ def render_dashboard():
                 )
             elif st.session_state.autotune_message:
                 st.caption(st.session_state.autotune_message)
-
-        def _handle_window_back(offset_limit):
-            st.session_state.window_offset = min(offset_limit, st.session_state.window_offset + 1)
-
-        def _handle_window_forward():
-            st.session_state.window_offset = max(0, st.session_state.window_offset - 1)
-
-        def _handle_window_latest():
-            st.session_state.window_offset = 0
-
-        nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
-        with nav_col1:
-            st.button(
-                "Back",
-                key="window_back_button",
-                disabled=st.session_state.window_offset >= max_offset,
-                on_click=_handle_window_back,
-                args=(max_offset,),
-            )
-        with nav_col2:
-            st.button(
-                "Forward",
-                key="window_forward_button",
-                disabled=st.session_state.window_offset <= 0,
-                on_click=_handle_window_forward,
-            )
-        with nav_col3:
-            st.button(
-                "Latest",
-                key="window_latest_button",
-                disabled=st.session_state.window_offset == 0,
-                on_click=_handle_window_latest,
-            )
-
-        _update_window_summary_state(
-            history_df,
-            history_time_column,
-            minutes_after_open,
-            entry_threshold,
-            hold_until_close_threshold,
-            trade_value_usd,
-        )
-
-        profit_loss_trade_records = _calculate_market_trade_records(
-            history_df,
-            history_time_column,
-            minutes_after_open,
-            entry_threshold,
-            hold_until_close_threshold,
-        )
-        closed_trades = build_trade_pnl_records(profit_loss_trade_records, trade_value_usd)
-        profit_loss_summary = summarize_profit_loss(
-            closed_trades,
-            reference_time=history_latest_timestamp,
-        )
-        drawdown_summary = summarize_drawdowns(
-            closed_trades,
-            reference_time=history_latest_timestamp,
-            test_balance_start=test_balance_start,
-        )
-        st.subheader("Profit/Loss")
-        pnl_col1, pnl_col2, pnl_col3, pnl_col4 = st.columns(4)
-        with pnl_col1:
-            st.metric("Today", _format_metric(profit_loss_summary["today"], lambda v: f"${v:,.2f}"))
-        with pnl_col2:
-            st.metric("Week-to-date", _format_metric(profit_loss_summary["week_to_date"], lambda v: f"${v:,.2f}"))
-        with pnl_col3:
-            st.metric("Month-to-date", _format_metric(profit_loss_summary["month_to_date"], lambda v: f"${v:,.2f}"))
-        with pnl_col4:
-            st.metric("All Time", _format_metric(profit_loss_summary["all_time"], lambda v: f"${v:,.2f}"))
-
-        drawdown_col1, drawdown_col2, drawdown_col3 = st.columns(3)
-        with drawdown_col1:
-            st.metric(
-                "Max Drawdown % (Today)",
-                _format_metric(drawdown_summary["today"], lambda v: f"{v * 100:.2f}%"),
-            )
-        with drawdown_col2:
-            st.metric(
-                "Max Drawdown % (Week-to-date)",
-                _format_metric(drawdown_summary["week_to_date"], lambda v: f"{v * 100:.2f}%"),
-            )
-        with drawdown_col3:
-            st.metric(
-                "Max Drawdown % (Month-to-date)",
-                _format_metric(drawdown_summary["month_to_date"], lambda v: f"{v * 100:.2f}%"),
-            )
 
         with st.expander("Window summary"):
             summary_df = pd.DataFrame(st.session_state.window_summary_rows)
