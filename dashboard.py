@@ -907,31 +907,32 @@ def render_probability_history(
         today_start_time = None
     current_open = _align_market_open(history_latest_timestamp)
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
-        market_start_time = market_rows[time_column].min()
-        market_open_time = _align_market_open(market_start_time)
-        if pd.isna(market_start_time):
-            countdown_display = "N/A"
-        else:
-            market_end_time = market_open_time + pd.Timedelta(minutes=15)
-            remaining_seconds = int((market_end_time - latest_timestamp).total_seconds())
-            remaining_seconds = max(0, remaining_seconds)
-            minutes_left = remaining_seconds // 60
-            seconds_left = remaining_seconds % 60
-            countdown_display = f"{minutes_left:02d}:{seconds_left:02d}"
-        st.metric("Minutes Left (MM:SS)", countdown_display)
-    with col2:
-        st.metric(
-            "Yes (Up) Cost",
-            _format_metric(latest.get("UpPrice"), lambda v: f"${v:.2f}"),
-        )
-    with col3:
-        st.metric(
-            "No (Down) Cost",
-            _format_metric(latest.get("DownPrice"), lambda v: f"${v:.2f}"),
-        )
+    market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
+    market_start_time = market_rows[time_column].min()
+    market_open_time = _align_market_open(market_start_time)
+    if pd.isna(market_start_time):
+        countdown_display = "N/A"
+    else:
+        market_end_time = market_open_time + pd.Timedelta(minutes=15)
+        remaining_seconds = int((market_end_time - latest_timestamp).total_seconds())
+        remaining_seconds = max(0, remaining_seconds)
+        minutes_left = remaining_seconds // 60
+        seconds_left = remaining_seconds % 60
+        countdown_display = f"{minutes_left:02d}:{seconds_left:02d}"
+    market_summary_table = pd.DataFrame(
+        [
+            {"Metric": "Minutes Left (MM:SS)", "Value": countdown_display},
+            {
+                "Metric": "Yes (Up) Cost",
+                "Value": _format_metric(latest.get("UpPrice"), lambda v: f"${v:.2f}"),
+            },
+            {
+                "Metric": "No (Down) Cost",
+                "Value": _format_metric(latest.get("DownPrice"), lambda v: f"${v:.2f}"),
+            },
+        ]
+    ).set_index("Metric")
+    st.dataframe(market_summary_table, width="stretch")
 
     # Initialize zoom mode
     if 'zoom_mode' not in st.session_state:
@@ -1266,59 +1267,8 @@ def render_summary_sections(
 
     profit_loss_summary = profit_loss_summary or {}
     drawdown_summary = drawdown_summary or {}
-    st.subheader("Profit/Loss")
-    pnl_table_col, gauge_col = st.columns([1.4, 1])
-    with pnl_table_col:
-        pnl_table = pd.DataFrame(
-            [
-                {
-                    "Period": "Today",
-                    "P/L (USD)": _format_metric(
-                        profit_loss_summary.get("today"),
-                        lambda v: f"${v:,.2f}",
-                    ),
-                    "Max Drawdown %": _format_metric(
-                        drawdown_summary.get("today"),
-                        lambda v: f"{v * 100:.2f}%",
-                    ),
-                },
-                {
-                    "Period": "7-day rolling",
-                    "P/L (USD)": _format_metric(
-                        profit_loss_summary.get("week_to_date"),
-                        lambda v: f"${v:,.2f}",
-                    ),
-                    "Max Drawdown %": _format_metric(
-                        drawdown_summary.get("week_to_date"),
-                        lambda v: f"{v * 100:.2f}%",
-                    ),
-                },
-                {
-                    "Period": "30-day rolling",
-                    "P/L (USD)": _format_metric(
-                        profit_loss_summary.get("month_to_date"),
-                        lambda v: f"${v:,.2f}",
-                    ),
-                    "Max Drawdown %": _format_metric(
-                        drawdown_summary.get("month_to_date"),
-                        lambda v: f"{v * 100:.2f}%",
-                    ),
-                },
-                {
-                    "Period": "All Time",
-                    "P/L (USD)": _format_metric(
-                        profit_loss_summary.get("all_time"),
-                        lambda v: f"${v:,.2f}",
-                    ),
-                    "Max Drawdown %": _format_metric(
-                        None,
-                        lambda v: f"{v * 100:.2f}%",
-                    ),
-                },
-            ]
-        ).set_index("Period")
-        st.dataframe(pnl_table, width="stretch")
-    with gauge_col:
+    strike_col, pnl_col = st.columns([1, 1])
+    with strike_col:
         gauge_value = 50 if pd.isna(strike_rate) else strike_rate
         gauge_value = max(50, min(100, gauge_value))
         win_rate_needed_pct = 50 if pd.isna(win_rate_needed) else win_rate_needed
@@ -1429,6 +1379,56 @@ def render_summary_sections(
             )
         elif st.session_state.autotune_message:
             st.caption(st.session_state.autotune_message)
+    with pnl_col:
+        pnl_table = pd.DataFrame(
+            [
+                {
+                    "Period": "Today",
+                    "P/L (USD)": _format_metric(
+                        profit_loss_summary.get("today"),
+                        lambda v: f"${v:,.2f}",
+                    ),
+                    "Max Drawdown %": _format_metric(
+                        drawdown_summary.get("today"),
+                        lambda v: f"{v * 100:.2f}%",
+                    ),
+                },
+                {
+                    "Period": "7-day rolling",
+                    "P/L (USD)": _format_metric(
+                        profit_loss_summary.get("week_to_date"),
+                        lambda v: f"${v:,.2f}",
+                    ),
+                    "Max Drawdown %": _format_metric(
+                        drawdown_summary.get("week_to_date"),
+                        lambda v: f"{v * 100:.2f}%",
+                    ),
+                },
+                {
+                    "Period": "30-day rolling",
+                    "P/L (USD)": _format_metric(
+                        profit_loss_summary.get("month_to_date"),
+                        lambda v: f"${v:,.2f}",
+                    ),
+                    "Max Drawdown %": _format_metric(
+                        drawdown_summary.get("month_to_date"),
+                        lambda v: f"{v * 100:.2f}%",
+                    ),
+                },
+                {
+                    "Period": "All Time",
+                    "P/L (USD)": _format_metric(
+                        profit_loss_summary.get("all_time"),
+                        lambda v: f"${v:,.2f}",
+                    ),
+                    "Max Drawdown %": _format_metric(
+                        None,
+                        lambda v: f"{v * 100:.2f}%",
+                    ),
+                },
+            ]
+        ).set_index("Period")
+        st.dataframe(pnl_table, width="stretch")
 
 def render_dashboard():
     title_col, refresh_col = st.columns([3, 1])
@@ -1483,6 +1483,32 @@ def render_dashboard():
         else:
             history_time_column = time_column
 
+        history_latest_timestamp = (
+            history_df[history_time_column].max()
+            if history_df is not None and not history_df.empty
+            else df[time_column].max()
+        )
+        summary_reference_time = df[time_column].max()
+        if pd.isna(summary_reference_time):
+            summary_reference_time = history_latest_timestamp
+        today_start_time = df[time_column].min()
+        if pd.isna(today_start_time):
+            today_start_time = None
+        current_open = _align_market_open(history_latest_timestamp)
+
+        render_summary_sections(
+            history_df,
+            history_time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+            trade_value_usd,
+            test_balance_start,
+            summary_reference_time,
+            today_start_time,
+            current_open,
+        )
+
         probability_renderer = render_probability_history
         if st.session_state.get("auto_refresh", False):
             probability_renderer = st.fragment(run_every=refresh_interval_seconds)(render_probability_history)
@@ -1498,18 +1524,6 @@ def render_dashboard():
             entry_threshold,
             hold_until_close_threshold,
             jump_container,
-        )
-        render_summary_sections(
-            history_df,
-            history_time_column,
-            minutes_after_open,
-            entry_threshold,
-            hold_until_close_threshold,
-            trade_value_usd,
-            test_balance_start,
-            chart_result["summary_reference_time"],
-            chart_result["today_start_time"],
-            chart_result["current_open"],
         )
 
         with st.expander("Window summary"):
