@@ -71,7 +71,7 @@ lookback_period = st.sidebar.number_input(
     "Lookback period (markets)",
     min_value=1,
     max_value=20,
-    value=4,
+    value=1,
     step=1,
     help="Number of markets to display in the window, including the current one.",
 )
@@ -101,14 +101,14 @@ hold_until_close_threshold = st.sidebar.number_input(
 resample_interval = st.sidebar.selectbox(
     "Resample interval",
     options=("1s", "5s", "15s", "30s", "60s", "all"),
-    index=1,
+    index=("1s", "5s", "15s", "30s", "60s", "all").index("5s"),
 )
 show_markers = st.sidebar.checkbox("Show markers", value=True)
 refresh_interval_seconds = st.sidebar.number_input(
     "Auto-refresh interval (seconds)",
     min_value=1,
     max_value=60,
-    value=1,
+    value=60,
     step=1,
     help="Controls the sleep duration for the auto-refresh loop.",
 )
