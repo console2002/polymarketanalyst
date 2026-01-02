@@ -307,6 +307,21 @@ def _split_trade_records(trade_records):
     return autotune_records, strike_records
 
 
+def _build_market_groups(df, time_column):
+    if df is None or df.empty:
+        return {}, []
+    if "TargetTime_dt" not in df.columns:
+        df = df.copy()
+        df["TargetTime_dt"] = pd.to_datetime(df["TargetTime"], format=TIME_FORMAT, errors="coerce")
+    target_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
+    groups = {}
+    for target_time, group in df.groupby("TargetTime_dt", sort=False):
+        if group.empty:
+            continue
+        groups[target_time] = group.sort_values(time_column)
+    return groups, target_order
+
+
 def _calculate_strike_rate_metrics(
     df,
     time_column,
@@ -314,6 +329,8 @@ def _calculate_strike_rate_metrics(
     entry_threshold,
     hold_until_close_threshold,
     history_segment="strike",
+    precomputed_groups=None,
+    precomputed_target_order=None,
 ):
     trade_records = calculate_market_trade_records(
         df,
@@ -322,6 +339,8 @@ def _calculate_strike_rate_metrics(
         entry_threshold,
         hold_until_close_threshold,
         TIME_FORMAT,
+        precomputed_groups=precomputed_groups,
+        precomputed_target_order=precomputed_target_order,
     )
 
     autotune_records, strike_records = _split_trade_records(trade_records)
@@ -494,6 +513,8 @@ def _update_strike_rate_state(
     entry_threshold,
     hold_until_close_threshold,
     current_open,
+    precomputed_groups=None,
+    precomputed_target_order=None,
 ):
     _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
     should_recalculate = _should_recalculate_strike_rate(
@@ -510,6 +531,8 @@ def _update_strike_rate_state(
             entry_threshold,
             hold_until_close_threshold,
             history_segment="strike",
+            precomputed_groups=precomputed_groups,
+            precomputed_target_order=precomputed_target_order,
         )
         _, _, _, autotune_sample_size = _calculate_strike_rate_metrics(
             history_df,
@@ -518,6 +541,8 @@ def _update_strike_rate_state(
             entry_threshold,
             hold_until_close_threshold,
             history_segment="autotune",
+            precomputed_groups=precomputed_groups,
+            precomputed_target_order=precomputed_target_order,
         )
         st.session_state.strike_rate = strike_rate
         st.session_state.avg_entry_price = avg_entry_price
@@ -1051,6 +1076,8 @@ def compute_summary_state(
     summary_reference_time,
     today_start_time,
     current_open,
+    precomputed_groups=None,
+    precomputed_target_order=None,
 ):
     _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
     _update_strike_rate_state(
@@ -1060,6 +1087,8 @@ def compute_summary_state(
         entry_threshold,
         hold_until_close_threshold,
         current_open,
+        precomputed_groups=precomputed_groups,
+        precomputed_target_order=precomputed_target_order,
     )
 
     strike_rate = st.session_state.strike_rate
@@ -1143,6 +1172,8 @@ def render_strike_rate_section(
     summary_state,
     history_df,
     history_time_column,
+    precomputed_groups=None,
+    precomputed_target_order=None,
 ):
     strike_rate = summary_state["strike_rate"]
     avg_entry_price = summary_state["avg_entry_price"]
@@ -1230,6 +1261,8 @@ def render_strike_rate_section(
                     threshold,
                     hold_threshold,
                     history_segment="autotune",
+                    precomputed_groups=precomputed_groups,
+                    precomputed_target_order=precomputed_target_order,
                 )
 
             best_result = run_autotune(
@@ -1374,6 +1407,10 @@ def render_dashboard():
         if pd.isna(today_start_time):
             today_start_time = None
         current_open = align_market_open(history_latest_timestamp)
+        history_market_groups, history_target_order = _build_market_groups(
+            history_df,
+            history_time_column,
+        )
 
         probability_window = prepare_probability_window(
             df,
@@ -1395,6 +1432,8 @@ def render_dashboard():
             summary_reference_time,
             today_start_time,
             current_open,
+            precomputed_groups=history_market_groups,
+            precomputed_target_order=history_target_order,
         )
         progress_bar.progress(0.85, text="Calculated summary metrics.")
 
@@ -1412,6 +1451,8 @@ def render_dashboard():
                 summary_state,
                 history_df,
                 history_time_column,
+                precomputed_groups=history_market_groups,
+                precomputed_target_order=history_target_order,
             )
         with header_cols[2]:
             market_summary_table = build_market_summary_table(
