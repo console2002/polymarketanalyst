@@ -113,6 +113,7 @@ def calculate_market_trade_records(
         close_up, close_down = _get_close_prices(market_group, time_column)
         exit_time = None
         exit_price = None
+        exit_price_market = None
         exit_reason = None
         if expected_side and entry_price is not None and not pd.isna(entry_price):
             if entry_price >= hold_threshold:
@@ -125,6 +126,7 @@ def calculate_market_trade_records(
                 if exit_cross_index is not None:
                     exit_time = eligible_after_entry.loc[exit_cross_index, time_column]
                     exit_price = eligible_after_entry.loc[exit_cross_index, side_column]
+                    exit_price_market = exit_price
                     exit_reason = "threshold"
                 else:
                     exit_time = market_close_time
@@ -132,6 +134,7 @@ def calculate_market_trade_records(
 
             if exit_time == market_close_time:
                 exit_price = close_up if expected_side == "Up" else close_down
+                exit_price_market = exit_price
 
         outcome = None
         if market_closed:
@@ -150,6 +153,9 @@ def calculate_market_trade_records(
         else:
             outcome = "Pending"
 
+        if market_closed and exit_reason == "held_to_close" and outcome in {"Win", "Lose"}:
+            exit_price = 1.0 if outcome == "Win" else 0.0
+
         records.append(
             {
                 "target_time_dt": target_time,
@@ -162,6 +168,7 @@ def calculate_market_trade_records(
                 "entry_price": entry_price,
                 "exit_time": exit_time,
                 "exit_price": exit_price,
+                "exit_price_market": exit_price_market,
                 "exit_reason": exit_reason,
                 "outcome": outcome,
                 "close_up": close_up,
