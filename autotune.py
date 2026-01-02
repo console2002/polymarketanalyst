@@ -37,25 +37,25 @@ def run_autotune(
                             f"hold_until_close_threshold={hold_value:.2f}"
                         ),
                     )
-            strike, avg_entry, win_rate, total_count = calculate_metrics(
-                df,
-                time_column,
-                minutes_value,
-                round(float(entry_value), 2),
-                round(float(hold_value), 2),
-            )
-            if total_count == 0 or pd.isna(win_rate) or pd.isna(strike):
-                continue
-            edge = strike - win_rate
-            if best_edge is None or edge > best_edge:
-                best_edge = edge
-                best_result = {
-                    "minutes_after_open": minutes_value,
-                    "entry_threshold": round(float(entry_value), 2),
-                    "hold_until_close_threshold": round(float(hold_value), 2),
-                    "strike_rate": strike,
-                    "win_rate_needed": win_rate,
-                    "edge": edge,
-                }
+                strike, avg_entry, win_rate, total_count = calculate_metrics(
+                    df,
+                    time_column,
+                    minutes_value,
+                    round(float(entry_value), 2),
+                    round(float(hold_value), 2),
+                )
+                if total_count == 0 or pd.isna(win_rate) or pd.isna(strike):
+                    continue
+                edge = strike - win_rate
+                if best_edge is None or edge > best_edge:
+                    best_edge = edge
+                    best_result = {
+                        "minutes_after_open": minutes_value,
+                        "entry_threshold": round(float(entry_value), 2),
+                        "hold_until_close_threshold": round(float(hold_value), 2),
+                        "strike_rate": strike,
+                        "win_rate_needed": win_rate,
+                        "edge": edge,
+                    }
 
     return best_result
