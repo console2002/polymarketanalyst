@@ -56,27 +56,40 @@ def calculate_market_trade_records(
     hold_until_close_threshold,
     time_format,
     target_order=None,
+    precomputed_groups=None,
+    precomputed_target_order=None,
 ):
-    if df is None or df.empty:
+    if (df is None or df.empty) and not precomputed_groups:
         return []
 
-    df = df.copy()
-    if "TargetTime_dt" not in df.columns:
-        df["TargetTime_dt"] = pd.to_datetime(df["TargetTime"], format=time_format, errors="coerce")
+    if precomputed_groups is None:
+        df = df.copy()
+        if "TargetTime_dt" not in df.columns:
+            df["TargetTime_dt"] = pd.to_datetime(df["TargetTime"], format=time_format, errors="coerce")
 
     minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
     probability_threshold = float(entry_threshold)
     hold_threshold = float(hold_until_close_threshold)
 
-    if target_order is None:
+    if precomputed_groups is None and target_order is None:
         target_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
+
+    if precomputed_groups is not None:
+        target_order = precomputed_target_order or target_order or list(precomputed_groups.keys())
 
     target_indices = {target: idx for idx, target in enumerate(target_order)}
     last_index = len(target_order) - 1
     records = []
 
     for target_time in target_order:
-        market_group = df[df["TargetTime_dt"] == target_time].sort_values(time_column)
+        if precomputed_groups is None:
+            market_group = df[df["TargetTime_dt"] == target_time].sort_values(time_column)
+        else:
+            market_group = precomputed_groups.get(target_time)
+            if market_group is None or market_group.empty:
+                continue
+            if not market_group[time_column].is_monotonic_increasing:
+                market_group = market_group.sort_values(time_column)
         if market_group.empty:
             continue
 
