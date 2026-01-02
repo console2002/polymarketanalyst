@@ -387,6 +387,7 @@ def _calculate_window_summary(
             and not pd.isna(record["exit_price"])
         ):
             pnl_usd = (record["exit_price"] - record["entry_price"]) * trade_value_usd
+        exit_price_display = record.get("exit_price_market", record["exit_price"])
 
         summary_rows.append(
             {
@@ -396,7 +397,7 @@ def _calculate_window_summary(
                 "Crossing Time": record["entry_time"],
                 "Entry Price": record["entry_price"],
                 "Exit Time": record["exit_time"],
-                "Exit Price": record["exit_price"],
+                "Exit Price": exit_price_display,
                 "Exit Reason": record["exit_reason"],
                 "P/L (USD)": pnl_usd,
                 "Outcome": record["outcome"],
@@ -897,13 +898,14 @@ def render_probability_history(
             entry_times.append(record["entry_time"])
             entry_prices.append(record["entry_price"])
 
-        if record["exit_time"] is not None and record["exit_price"] is not None:
+        exit_price_display = record.get("exit_price_market", record["exit_price"])
+        if record["exit_time"] is not None and exit_price_display is not None and not pd.isna(exit_price_display):
             if record["exit_reason"] == "threshold":
                 exit_times.append(record["exit_time"])
-                exit_prices.append(record["exit_price"])
+                exit_prices.append(exit_price_display)
             elif record["exit_reason"] == "held_to_close":
                 held_times.append(record["exit_time"])
-                held_prices.append(record["exit_price"])
+                held_prices.append(exit_price_display)
 
         if record["outcome"] in {"Win", "Lose", "Tie"}:
             if record["exit_reason"] == "threshold":
