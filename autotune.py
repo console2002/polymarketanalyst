@@ -37,14 +37,33 @@ def run_autotune(
                             f"hold_until_close_threshold={hold_value:.2f}"
                         ),
                     )
-                strike, _, _, _, win_rate, total_count = calculate_metrics(
+                metrics = calculate_metrics(
                     df,
                     time_column,
                     minutes_value,
                     round(float(entry_value), 2),
                     round(float(hold_value), 2),
                 )
-                if total_count == 0 or pd.isna(win_rate) or pd.isna(strike):
+                if isinstance(metrics, dict):
+                    strike = metrics.get("strike_rate", metrics.get("strike"))
+                    win_rate = metrics.get("win_rate_needed", metrics.get("win_rate"))
+                    total_count = metrics.get(
+                        "total_count",
+                        metrics.get("sample_size", metrics.get("count")),
+                    )
+                else:
+                    metrics_values = list(metrics)
+                    if len(metrics_values) < 3:
+                        continue
+                    strike = metrics_values[0]
+                    win_rate = metrics_values[-2]
+                    total_count = metrics_values[-1]
+                if (
+                    total_count in {0, None}
+                    or pd.isna(total_count)
+                    or pd.isna(win_rate)
+                    or pd.isna(strike)
+                ):
                     continue
                 edge = strike - win_rate
                 if best_edge is None or edge > best_edge:
