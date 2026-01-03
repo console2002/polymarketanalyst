@@ -357,13 +357,17 @@ def _calculate_strike_rate_metrics(
     entry_prices = [record["entry_price"] for record in trade_records if record["entry_price"] is not None]
     if entry_prices:
         avg_entry_price = sum(entry_prices) / len(entry_prices)
+        min_entry_price = min(entry_prices)
+        max_entry_price = max(entry_prices)
         gain = 1 - avg_entry_price
         loss = 1.0
         win_rate_needed = loss / (gain + loss) * 100
     else:
         avg_entry_price = np.nan
+        min_entry_price = np.nan
+        max_entry_price = np.nan
         win_rate_needed = np.nan
-    return strike_rate, avg_entry_price, win_rate_needed, total_count
+    return strike_rate, avg_entry_price, min_entry_price, max_entry_price, win_rate_needed, total_count
 
 
 def _calculate_window_summary(
@@ -524,7 +528,14 @@ def _update_strike_rate_state(
         hold_until_close_threshold,
     )
     if should_recalculate:
-        strike_rate, avg_entry_price, win_rate_needed, strike_sample_size = _calculate_strike_rate_metrics(
+        (
+            strike_rate,
+            avg_entry_price,
+            min_entry_price,
+            max_entry_price,
+            win_rate_needed,
+            strike_sample_size,
+        ) = _calculate_strike_rate_metrics(
             history_df,
             history_time_column,
             minutes_after_open,
@@ -534,7 +545,7 @@ def _update_strike_rate_state(
             precomputed_groups=precomputed_groups,
             precomputed_target_order=precomputed_target_order,
         )
-        _, _, _, autotune_sample_size = _calculate_strike_rate_metrics(
+        _, _, _, _, _, autotune_sample_size = _calculate_strike_rate_metrics(
             history_df,
             history_time_column,
             minutes_after_open,
@@ -546,6 +557,8 @@ def _update_strike_rate_state(
         )
         st.session_state.strike_rate = strike_rate
         st.session_state.avg_entry_price = avg_entry_price
+        st.session_state.min_entry_price = min_entry_price
+        st.session_state.max_entry_price = max_entry_price
         st.session_state.win_rate_needed = win_rate_needed
         st.session_state.strike_sample_size = strike_sample_size
         st.session_state.autotune_sample_size = autotune_sample_size
@@ -1093,6 +1106,8 @@ def compute_summary_state(
 
     strike_rate = st.session_state.strike_rate
     avg_entry_price = st.session_state.get("avg_entry_price", np.nan)
+    min_entry_price = st.session_state.get("min_entry_price", np.nan)
+    max_entry_price = st.session_state.get("max_entry_price", np.nan)
     win_rate_needed = st.session_state.get("win_rate_needed", np.nan)
     strike_sample_size = st.session_state.get("strike_sample_size")
     autotune_sample_size = st.session_state.get("autotune_sample_size")
@@ -1160,6 +1175,8 @@ def compute_summary_state(
     return {
         "strike_rate": strike_rate,
         "avg_entry_price": avg_entry_price,
+        "min_entry_price": min_entry_price,
+        "max_entry_price": max_entry_price,
         "win_rate_needed": win_rate_needed,
         "strike_sample_size": strike_sample_size,
         "autotune_sample_size": autotune_sample_size,
@@ -1177,6 +1194,8 @@ def render_strike_rate_section(
 ):
     strike_rate = summary_state["strike_rate"]
     avg_entry_price = summary_state["avg_entry_price"]
+    min_entry_price = summary_state["min_entry_price"]
+    max_entry_price = summary_state["max_entry_price"]
     win_rate_needed = summary_state["win_rate_needed"]
     strike_sample_size = summary_state["strike_sample_size"]
     autotune_sample_size = summary_state["autotune_sample_size"]
@@ -1214,7 +1233,14 @@ def render_strike_rate_section(
         margin=dict(l=10, r=10, t=60, b=10),
     )
     st.plotly_chart(gauge_fig, width='stretch', config={'displayModeBar': False})
-    average_entry_display = f"{avg_entry_price:.2f}" if not pd.isna(avg_entry_price) else "N/A"
+    if not pd.isna(avg_entry_price):
+        average_entry_display = f"{avg_entry_price:.2f}"
+        if not pd.isna(min_entry_price) and not pd.isna(max_entry_price):
+            average_entry_display = (
+                f"{average_entry_display} (L {min_entry_price:.2f}, H {max_entry_price:.2f})"
+            )
+    else:
+        average_entry_display = "N/A"
     win_rate_display = f"{win_rate_needed:.2f}%" if not pd.isna(win_rate_needed) else "N/A"
     if not pd.isna(strike_rate) and not pd.isna(win_rate_needed):
         edge_value = strike_rate - win_rate_needed
