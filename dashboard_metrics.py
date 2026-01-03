@@ -24,29 +24,24 @@ def build_trade_pnl_records(trade_records, trade_value_usd):
     return closed_trades
 
 
-def _rolling_window_dates(closed_trades, reference_time, window_size):
-    reference_date = pd.Timestamp(reference_time).date()
-    unique_dates = sorted(
-        {
-            trade["exit_time"].date()
-            for trade in closed_trades
-            if trade["exit_time"].date() < reference_date
-        }
-    )
-    if not unique_dates:
-        return []
-    return unique_dates[-window_size:]
+def _rolling_window_date_range(today_start, window_size):
+    if today_start is None:
+        return None, None
+    today_start = pd.Timestamp(today_start).normalize()
+    end_date = (today_start - pd.Timedelta(days=1)).date()
+    start_date = (today_start - pd.Timedelta(days=window_size)).date()
+    return start_date, end_date
 
 
-def _filter_trades_by_dates(closed_trades, allowed_dates, reference_time=None):
-    if not allowed_dates:
+def _filter_trades_by_date_range(closed_trades, start_date, end_date, reference_time=None):
+    if start_date is None or end_date is None:
         return []
-    date_set = set(allowed_dates)
     reference_ts = pd.Timestamp(reference_time) if reference_time is not None else None
     filtered = []
     for trade in closed_trades:
         exit_time = trade["exit_time"]
-        if exit_time.date() not in date_set:
+        exit_date = exit_time.date()
+        if exit_date < start_date or exit_date > end_date:
             continue
         if reference_ts is not None and exit_time > reference_ts:
             continue
@@ -78,16 +73,24 @@ def summarize_profit_loss(closed_trades, reference_time, today_start_time=None):
 
     reference_ts = pd.Timestamp(reference_time)
     today_start = pd.Timestamp(today_start_time) if today_start_time is not None else reference_ts.normalize()
-    rolling_week_dates = _rolling_window_dates(closed_trades, reference_ts, 7)
-    rolling_month_dates = _rolling_window_dates(closed_trades, reference_ts, 30)
+    rolling_week_start, rolling_week_end = _rolling_window_date_range(today_start, 7)
+    rolling_month_start, rolling_month_end = _rolling_window_date_range(today_start, 30)
 
     def _sum_trades(trades):
         return sum(trade["pnl_usd"] for trade in trades)
 
     return {
         "today": _sum_trades(_filter_trades_since(closed_trades, today_start, reference_ts)),
-        "week_to_date": _sum_trades(_filter_trades_by_dates(closed_trades, rolling_week_dates, reference_ts)),
-        "month_to_date": _sum_trades(_filter_trades_by_dates(closed_trades, rolling_month_dates, reference_ts)),
+        "week_to_date": _sum_trades(
+            _filter_trades_by_date_range(
+                closed_trades, rolling_week_start, rolling_week_end, reference_ts
+            )
+        ),
+        "month_to_date": _sum_trades(
+            _filter_trades_by_date_range(
+                closed_trades, rolling_month_start, rolling_month_end, reference_ts
+            )
+        ),
         "all_time": _sum_trades(_filter_trades_since(closed_trades, pd.Timestamp.min, reference_ts)),
     }
 
@@ -102,8 +105,8 @@ def summarize_drawdowns(closed_trades, reference_time, test_balance_start, today
 
     reference_ts = pd.Timestamp(reference_time)
     today_start = pd.Timestamp(today_start_time) if today_start_time is not None else reference_ts.normalize()
-    rolling_week_dates = _rolling_window_dates(closed_trades, reference_ts, 7)
-    rolling_month_dates = _rolling_window_dates(closed_trades, reference_ts, 30)
+    rolling_week_start, rolling_week_end = _rolling_window_date_range(today_start, 7)
+    rolling_month_start, rolling_month_end = _rolling_window_date_range(today_start, 30)
 
     def _max_drawdown(trades):
         if not trades:
@@ -119,6 +122,14 @@ def summarize_drawdowns(closed_trades, reference_time, test_balance_start, today
 
     return {
         "today": _max_drawdown(_filter_trades_since(closed_trades, today_start, reference_ts)),
-        "week_to_date": _max_drawdown(_filter_trades_by_dates(closed_trades, rolling_week_dates, reference_ts)),
-        "month_to_date": _max_drawdown(_filter_trades_by_dates(closed_trades, rolling_month_dates, reference_ts)),
+        "week_to_date": _max_drawdown(
+            _filter_trades_by_date_range(
+                closed_trades, rolling_week_start, rolling_week_end, reference_ts
+            )
+        ),
+        "month_to_date": _max_drawdown(
+            _filter_trades_by_date_range(
+                closed_trades, rolling_month_start, rolling_month_end, reference_ts
+            )
+        ),
     }
