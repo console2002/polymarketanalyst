@@ -37,7 +37,7 @@ def run_autotune(
                             f"hold_until_close_threshold={hold_value:.2f}"
                         ),
                     )
-                strike, avg_entry, win_rate, total_count = calculate_metrics(
+                strike, _, _, _, win_rate, total_count = calculate_metrics(
                     df,
                     time_column,
                     minutes_value,
