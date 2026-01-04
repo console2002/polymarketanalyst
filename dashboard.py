@@ -462,6 +462,88 @@ def _calculate_trade_records(
     return trade_records
 
 
+def _get_cached_trade_records(
+    df,
+    time_column,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
+    allow_compute,
+    target_order=None,
+    precomputed_groups=None,
+    precomputed_target_order=None,
+):
+    normalized_mode = _normalize_second_entry_mode(second_entry_mode)
+    data_signature = _get_data_signature(df, time_column, precomputed_groups, precomputed_target_order)
+    cache_key = _build_second_entry_cache_key(
+        data_signature,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        second_entry_threshold,
+        normalized_mode,
+    )
+    cache_path = _get_second_entry_cache_path(cache_key)
+    cached_records = _load_second_entry_cache(cache_path)
+    if cached_records is not None or not allow_compute:
+        return cached_records
+    return _calculate_trade_records(
+        df,
+        time_column,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        normalized_mode,
+        second_entry_threshold,
+        target_order=target_order,
+        precomputed_groups=precomputed_groups,
+        precomputed_target_order=precomputed_target_order,
+    )
+
+
+def _summarize_trade_record_metrics(trade_records, trade_value_usd):
+    if not trade_records:
+        return {
+            "trade_count": np.nan,
+            "win_rate": np.nan,
+            "expectancy": np.nan,
+            "edge": np.nan,
+        }
+    closed_records = [
+        record
+        for record in trade_records
+        if record.get("outcome") in {"Win", "Lose", "Tie"}
+        and record.get("entry_price") is not None
+        and record.get("exit_price") is not None
+        and not pd.isna(record.get("entry_price"))
+        and not pd.isna(record.get("exit_price"))
+    ]
+    trade_count = len(closed_records)
+    wins = sum(1 for record in closed_records if record.get("outcome") == "Win")
+    win_rate = (wins / trade_count * 100) if trade_count else np.nan
+    entry_prices = [record["entry_price"] for record in closed_records]
+    if entry_prices:
+        avg_entry_price = sum(entry_prices) / len(entry_prices)
+        gain = 1 - avg_entry_price
+        loss = 1.0
+        win_rate_needed = loss / (gain + loss) * 100
+    else:
+        win_rate_needed = np.nan
+    edge = win_rate - win_rate_needed if not pd.isna(win_rate) and not pd.isna(win_rate_needed) else np.nan
+    pnl_values = [
+        (record["exit_price"] - record["entry_price"]) * trade_value_usd
+        for record in closed_records
+    ]
+    expectancy = (sum(pnl_values) / len(pnl_values)) if pnl_values else np.nan
+    return {
+        "trade_count": trade_count,
+        "win_rate": win_rate,
+        "expectancy": expectancy,
+        "edge": edge,
+    }
+
 
 
 def _split_trade_records(trade_records):
@@ -1455,6 +1537,32 @@ def compute_summary_state(
 
     profit_loss_summary = profit_loss_summary or {}
     drawdown_summary = drawdown_summary or {}
+    second_entry_records = _get_cached_trade_records(
+        history_df,
+        history_time_column,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        second_entry_mode,
+        second_entry_threshold,
+        allow_compute=True,
+        precomputed_groups=precomputed_groups,
+        precomputed_target_order=precomputed_target_order,
+    )
+    baseline_records = _get_cached_trade_records(
+        history_df,
+        history_time_column,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        "off",
+        second_entry_threshold,
+        allow_compute=False,
+        precomputed_groups=precomputed_groups,
+        precomputed_target_order=precomputed_target_order,
+    )
+    second_entry_metrics = _summarize_trade_record_metrics(second_entry_records, trade_value_usd)
+    baseline_metrics = _summarize_trade_record_metrics(baseline_records, trade_value_usd)
     return {
         "strike_rate": strike_rate,
         "avg_entry_price": avg_entry_price,
@@ -1465,6 +1573,8 @@ def compute_summary_state(
         "autotune_sample_size": autotune_sample_size,
         "profit_loss_summary": profit_loss_summary,
         "drawdown_summary": drawdown_summary,
+        "second_entry_metrics": second_entry_metrics,
+        "baseline_metrics": baseline_metrics,
     }
 
 
@@ -1660,6 +1770,50 @@ def render_profit_loss_section(summary_state):
     ).set_index("Period")
     st.dataframe(pnl_table, width="stretch")
 
+
+def render_second_entry_summary(summary_state):
+    second_entry_metrics = summary_state.get("second_entry_metrics") or {}
+    baseline_metrics = summary_state.get("baseline_metrics") or {}
+    edge_delta = np.nan
+    if not pd.isna(second_entry_metrics.get("edge", np.nan)) and not pd.isna(
+        baseline_metrics.get("edge", np.nan)
+    ):
+        edge_delta = second_entry_metrics["edge"] - baseline_metrics["edge"]
+    metrics_table = pd.DataFrame(
+        [
+            {
+                "Metric": "Trade Count",
+                "Value": _format_metric(
+                    second_entry_metrics.get("trade_count"),
+                    lambda v: f"{int(v)}",
+                ),
+            },
+            {
+                "Metric": "Win Rate",
+                "Value": _format_metric(
+                    second_entry_metrics.get("win_rate"),
+                    lambda v: f"{v:.2f}%",
+                ),
+            },
+            {
+                "Metric": "Expectancy (USD)",
+                "Value": _format_metric(
+                    second_entry_metrics.get("expectancy"),
+                    lambda v: f"${v:,.2f}",
+                ),
+            },
+            {
+                "Metric": "Edge Δ vs Baseline",
+                "Value": _format_metric(
+                    edge_delta,
+                    lambda v: f"{v:+.2f}%",
+                ),
+            },
+        ]
+    ).set_index("Metric")
+    st.subheader("Second-Entry Summary")
+    st.dataframe(metrics_table, width="stretch")
+
 def render_dashboard():
     if available_dates:
         selected_date = st.sidebar.date_input(
@@ -1779,6 +1933,7 @@ def render_dashboard():
             )
             st.dataframe(market_summary_table, width="stretch")
             render_profit_loss_section(summary_state)
+            render_second_entry_summary(summary_state)
 
         probability_renderer = render_probability_history
         if st.session_state.get("auto_refresh", False):
