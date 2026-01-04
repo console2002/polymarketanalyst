@@ -1796,40 +1796,47 @@ def render_strike_rate_section(
         use_container_width=True,
     )
     if second_entry_autotune_clicked:
-        second_entry_progress_container = st.empty()
-        second_entry_status_container = st.status("Second-entry autotuning…", expanded=True)
-        second_entry_progress_bar = second_entry_progress_container.progress(0)
-
-        def _second_entry_progress_callback(current_step, total_steps, message):
-            second_entry_progress_bar.progress(current_step / total_steps)
-            second_entry_status_container.write(message)
-
-        with second_entry_status_container:
-            second_entry_results = run_second_entry_autotune(
-                history_df,
-                history_time_column,
-                minutes_after_open,
-                entry_threshold,
-                hold_until_close_threshold,
-                progress_callback=_second_entry_progress_callback,
-                precomputed_groups=precomputed_groups,
-                precomputed_target_order=precomputed_target_order,
-            )
-        second_entry_progress_container.empty()
-        second_entry_status_container.update(
-            state="complete",
-            label="Second-entry autotune complete",
-        )
-        if second_entry_results and any(second_entry_results.values()):
-            st.session_state.second_entry_autotune_result = second_entry_results
-            st.session_state.second_entry_autotune_panel = _build_second_entry_autotune_panel(
-                second_entry_results
-            )
-            st.session_state.second_entry_autotune_message = None
-        else:
+        normalized_second_entry_mode = _normalize_second_entry_mode(second_entry_mode)
+        if normalized_second_entry_mode == "off":
             st.session_state.second_entry_autotune_result = None
             st.session_state.second_entry_autotune_panel = None
-            st.session_state.second_entry_autotune_message = "No viable data for second-entry autotune"
+            st.session_state.second_entry_autotune_message = None
+        else:
+            second_entry_progress_container = st.empty()
+            second_entry_status_container = st.status("Second-entry autotuning…", expanded=True)
+            second_entry_progress_bar = second_entry_progress_container.progress(0)
+
+            def _second_entry_progress_callback(current_step, total_steps, message):
+                second_entry_progress_bar.progress(current_step / total_steps)
+                second_entry_status_container.write(message)
+
+            with second_entry_status_container:
+                second_entry_results = run_second_entry_autotune(
+                    history_df,
+                    history_time_column,
+                    minutes_after_open,
+                    entry_threshold,
+                    hold_until_close_threshold,
+                    modes=(normalized_second_entry_mode,),
+                    progress_callback=_second_entry_progress_callback,
+                    precomputed_groups=precomputed_groups,
+                    precomputed_target_order=precomputed_target_order,
+                )
+            second_entry_progress_container.empty()
+            second_entry_status_container.update(
+                state="complete",
+                label="Second-entry autotune complete",
+            )
+            if second_entry_results and any(second_entry_results.values()):
+                st.session_state.second_entry_autotune_result = second_entry_results
+                st.session_state.second_entry_autotune_panel = _build_second_entry_autotune_panel(
+                    second_entry_results
+                )
+                st.session_state.second_entry_autotune_message = None
+            else:
+                st.session_state.second_entry_autotune_result = None
+                st.session_state.second_entry_autotune_panel = None
+                st.session_state.second_entry_autotune_message = "No viable data for second-entry autotune"
     if st.session_state.second_entry_autotune_panel:
         st.markdown("Second-entry autotune results")
         panel_df = pd.DataFrame(st.session_state.second_entry_autotune_panel)
