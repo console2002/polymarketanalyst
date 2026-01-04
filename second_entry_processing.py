@@ -12,6 +12,7 @@ from dashboard_processing import (
 )
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache", "second_entry")
+CACHE_SCHEMA_VERSION = 2
 
 
 def _find_pullback_crossing(series, threshold):
@@ -57,6 +58,7 @@ def _build_second_entry_cache_key(
     second_entry_mode,
 ):
     payload = {
+        "schema_version": CACHE_SCHEMA_VERSION,
         "data_signature": data_signature,
         "entry_threshold": float(entry_threshold),
         "hold_until_close_threshold": float(hold_until_close_threshold),
@@ -201,6 +203,7 @@ def calculate_market_trade_records_with_second_entry(
         second_entry_price = None
         second_entry_taken = False
         trade_executed = False
+        position_multiplier = 1
         if expected_side and trigger_time is not None:
             side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
             if entry_mode == "off":
@@ -222,6 +225,7 @@ def calculate_market_trade_records_with_second_entry(
                     if second_entry_taken:
                         if trigger_price is not None and second_entry_price is not None:
                             entry_price = np.mean([trigger_price, second_entry_price])
+                            position_multiplier = 2
                     else:
                         entry_price = trigger_price
                     trade_executed = entry_time is not None and entry_price is not None
@@ -303,6 +307,7 @@ def calculate_market_trade_records_with_second_entry(
                     "entry_mode": entry_mode,
                     "entry_time": entry_time,
                     "entry_price": entry_price,
+                    "position_multiplier": position_multiplier,
                     "exit_time": exit_time,
                     "exit_price": exit_price,
                     "exit_price_market": exit_price_market,

@@ -14,7 +14,8 @@ def build_trade_pnl_records(trade_records, trade_value_usd):
         exit_timestamp = record.get("exit_time") or record.get("market_close_time")
         if exit_timestamp is None or pd.isna(exit_timestamp):
             continue
-        pnl_usd = (exit_price - entry_price) * trade_value_usd
+        position_multiplier = record.get("position_multiplier", 1)
+        pnl_usd = (exit_price - entry_price) * trade_value_usd * position_multiplier
         closed_trades.append(
             {
                 "exit_time": pd.Timestamp(exit_timestamp),

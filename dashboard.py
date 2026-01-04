@@ -24,6 +24,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) or os.getcwd()
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
 CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache", "second_entry")
+CACHE_SCHEMA_VERSION = 2
 
 
 def add_vline_all_rows(fig, x, **kwargs):
@@ -316,6 +317,7 @@ def _build_second_entry_cache_key(
     second_entry_mode,
 ):
     payload = {
+        "schema_version": CACHE_SCHEMA_VERSION,
         "data_signature": data_signature,
         "minutes_after_open": int(minutes_after_open),
         "entry_threshold": float(entry_threshold),
@@ -602,7 +604,9 @@ def _summarize_trade_record_metrics(trade_records, trade_value_usd):
         win_rate_needed = np.nan
     edge = win_rate - win_rate_needed if not pd.isna(win_rate) and not pd.isna(win_rate_needed) else np.nan
     pnl_values = [
-        (record["exit_price"] - record["entry_price"]) * trade_value_usd
+        (record["exit_price"] - record["entry_price"])
+        * trade_value_usd
+        * record.get("position_multiplier", 1)
         for record in closed_records
     ]
     expectancy = (sum(pnl_values) / len(pnl_values)) if pnl_values else np.nan
@@ -736,7 +740,11 @@ def _calculate_window_summary(
             and not pd.isna(record["entry_price"])
             and not pd.isna(record["exit_price"])
         ):
-            pnl_usd = (record["exit_price"] - record["entry_price"]) * trade_value_usd
+            pnl_usd = (
+                (record["exit_price"] - record["entry_price"])
+                * trade_value_usd
+                * record.get("position_multiplier", 1)
+            )
         exit_price_display = record.get("exit_price_market", record["exit_price"])
 
         summary_rows.append(
