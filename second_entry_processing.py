@@ -227,6 +227,9 @@ def calculate_market_trade_records_with_second_entry(
                         entry_time = second_entry_time
                         entry_price = second_entry_price
                         trade_executed = True
+                    else:
+                        # Sole mode only trades on the pullback entry; skip if none occurs.
+                        continue
 
         close_up, close_down = _get_close_prices(market_group, time_column)
         exit_time = None
