@@ -184,6 +184,14 @@ def calculate_market_trade_records_with_second_entry(
             if candidates:
                 expected_side, trigger_time, trigger_price = min(candidates, key=lambda item: item[1])
 
+        market_end_time = market_open + pd.Timedelta(minutes=15)
+        market_close_time = market_group[time_column].iloc[-1]
+        target_index = target_indices.get(target_time)
+        market_closed = (
+            (target_index is not None and target_index < last_index)
+            or market_close_time >= market_end_time
+        )
+
         entry_time = None
         entry_price = None
         second_entry_time = None
@@ -209,30 +217,29 @@ def calculate_market_trade_records_with_second_entry(
                 if entry_mode == "additive":
                     entry_time = trigger_time
                     if second_entry_taken:
-                        entry_price = np.mean([trigger_price, second_entry_price])
+                        if trigger_price is not None and second_entry_price is not None:
+                            entry_price = np.mean([trigger_price, second_entry_price])
                     else:
                         entry_price = trigger_price
-                    trade_executed = True
+                    trade_executed = entry_time is not None and entry_price is not None
                 elif entry_mode == "sole":
-                    if second_entry_taken:
+                    if second_entry_taken and second_entry_time is not None:
                         entry_time = second_entry_time
                         entry_price = second_entry_price
                         trade_executed = True
-
-        market_end_time = market_open + pd.Timedelta(minutes=15)
-        market_close_time = market_group[time_column].iloc[-1]
-        target_index = target_indices.get(target_time)
-        market_closed = (
-            (target_index is not None and target_index < last_index)
-            or market_close_time >= market_end_time
-        )
 
         close_up, close_down = _get_close_prices(market_group, time_column)
         exit_time = None
         exit_price = None
         exit_price_market = None
         exit_reason = None
-        if trade_executed and entry_price is not None and not pd.isna(entry_price):
+        entry_valid = (
+            trade_executed
+            and entry_time is not None
+            and entry_price is not None
+            and not pd.isna(entry_price)
+        )
+        if entry_valid and entry_price > 0:
             if entry_price >= hold_threshold:
                 exit_time = market_close_time
                 exit_reason = "held_to_close"
@@ -274,31 +281,32 @@ def calculate_market_trade_records_with_second_entry(
         if market_closed and exit_reason == "held_to_close" and outcome in {"Win", "Lose"}:
             exit_price = 1.0 if outcome == "Win" else 0.0
 
-        records.append(
-            {
-                "target_time_dt": target_time,
-                "target_time": market_group["TargetTime"].iloc[0] if "TargetTime" in market_group.columns else None,
-                "market_open": market_open,
-                "open_threshold_time": open_threshold_time,
-                "market_close_time": market_close_time,
-                "expected_side": expected_side,
-                "trigger_time": trigger_time,
-                "trigger_price": trigger_price,
-                "second_entry_time": second_entry_time,
-                "second_entry_price": second_entry_price,
-                "entry_mode": entry_mode,
-                "entry_time": entry_time,
-                "entry_price": entry_price,
-                "exit_time": exit_time,
-                "exit_price": exit_price,
-                "exit_price_market": exit_price_market,
-                "exit_reason": exit_reason,
-                "outcome": outcome,
-                "close_up": close_up,
-                "close_down": close_down,
-                "market_closed": market_closed,
-            }
-        )
+        if entry_valid and entry_price > 0:
+            records.append(
+                {
+                    "target_time_dt": target_time,
+                    "target_time": market_group["TargetTime"].iloc[0] if "TargetTime" in market_group.columns else None,
+                    "market_open": market_open,
+                    "open_threshold_time": open_threshold_time,
+                    "market_close_time": market_close_time,
+                    "expected_side": expected_side,
+                    "trigger_time": trigger_time,
+                    "trigger_price": trigger_price,
+                    "second_entry_time": second_entry_time,
+                    "second_entry_price": second_entry_price,
+                    "entry_mode": entry_mode,
+                    "entry_time": entry_time,
+                    "entry_price": entry_price,
+                    "exit_time": exit_time,
+                    "exit_price": exit_price,
+                    "exit_price_market": exit_price_market,
+                    "exit_reason": exit_reason,
+                    "outcome": outcome,
+                    "close_up": close_up,
+                    "close_down": close_down,
+                    "market_closed": market_closed,
+                }
+            )
 
     _write_second_entry_cache(cache_path, records)
     return records
