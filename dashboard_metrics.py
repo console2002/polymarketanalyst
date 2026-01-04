@@ -28,8 +28,8 @@ def _rolling_window_date_range(today_start, window_size):
     if today_start is None:
         return None, None
     today_start = pd.Timestamp(today_start).normalize()
-    end_date = (today_start - pd.Timedelta(days=1)).date()
-    start_date = (today_start - pd.Timedelta(days=window_size)).date()
+    end_date = today_start.date()
+    start_date = (today_start - pd.Timedelta(days=window_size - 1)).date()
     return start_date, end_date
 
 
