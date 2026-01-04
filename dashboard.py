@@ -443,7 +443,7 @@ def _build_second_entry_autotune_panel(results):
                 "Mode": mode_label.title(),
                 "Best 2nd Threshold": _format_metric(
                     result.get("second_entry_threshold"),
-                    lambda v: f"{v:.2f}",
+                    lambda v: f"{v:.3f}",
                 ),
                 "Strike Rate": _format_metric(
                     result.get("strike_rate"),

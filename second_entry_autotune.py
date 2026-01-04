@@ -109,7 +109,7 @@ def run_second_entry_autotune(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
-    second_entry_threshold_range=np.arange(0.40, 0.701, 0.002),
+    second_entry_threshold_range=np.arange(0.40, 0.701, 0.02),
     modes=("additive", "sole"),
     time_format=TIME_FORMAT,
     summary_segment="strike",
@@ -118,7 +118,12 @@ def run_second_entry_autotune(
     precomputed_target_order=None,
 ):
     second_entry_values = list(second_entry_threshold_range)
-    mode_list = [mode for mode in modes if mode]
+    normalized_modes = [
+        str(mode).strip().lower()
+        for mode in modes
+        if mode and str(mode).strip().lower() != "off"
+    ]
+    mode_list = normalized_modes
     total_steps = len(second_entry_values) * len(mode_list)
     completed_steps = 0
     results = {}
@@ -134,7 +139,7 @@ def run_second_entry_autotune(
                     total_steps,
                     (
                         "Evaluating "
-                        f"second_entry_threshold={float(second_entry_value):.2f}, "
+                        f"second_entry_threshold={float(second_entry_value):.3f}, "
                         f"mode={mode}"
                     ),
                 )
@@ -144,7 +149,7 @@ def run_second_entry_autotune(
                 minutes_after_open,
                 entry_threshold,
                 hold_until_close_threshold,
-                round(float(second_entry_value), 2),
+                round(float(second_entry_value), 3),
                 mode,
                 time_format=time_format,
                 precomputed_groups=precomputed_groups,
@@ -167,7 +172,7 @@ def run_second_entry_autotune(
                     "minutes_after_open": minutes_after_open,
                     "entry_threshold": round(float(entry_threshold), 2),
                     "hold_until_close_threshold": round(float(hold_until_close_threshold), 2),
-                    "second_entry_threshold": round(float(second_entry_value), 2),
+                    "second_entry_threshold": round(float(second_entry_value), 3),
                     "second_entry_mode": mode,
                     "strike_rate": strike_rate,
                     "win_rate_needed": win_rate_needed,
