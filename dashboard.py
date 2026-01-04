@@ -399,6 +399,46 @@ def _format_metric(value, formatter):
     except (TypeError, ValueError):
         return "N/A"
 
+
+def _build_second_entry_autotune_panel(results):
+    if not results:
+        return []
+    rows = []
+    for mode_label in ("additive", "sole"):
+        result = results.get(mode_label)
+        if not result:
+            continue
+        rows.append(
+            {
+                "Mode": mode_label.title(),
+                "Best 2nd Threshold": _format_metric(
+                    result.get("second_entry_threshold"),
+                    lambda v: f"{v:.2f}",
+                ),
+                "Strike Rate": _format_metric(
+                    result.get("strike_rate"),
+                    lambda v: f"{v:.2f}%",
+                ),
+                "Win Rate Needed": _format_metric(
+                    result.get("win_rate_needed"),
+                    lambda v: f"{v:.2f}%",
+                ),
+                "Edge": _format_metric(
+                    result.get("edge"),
+                    lambda v: f"{v:+.2f}%",
+                ),
+                "Trades": _format_metric(
+                    result.get("trade_count"),
+                    lambda v: f"{int(v)}",
+                ),
+                "Expectancy": _format_metric(
+                    result.get("expectancy"),
+                    lambda v: f"{v:.4f}",
+                ),
+            }
+        )
+    return rows
+
 def _normalize_second_entry_mode(mode):
     if not mode:
         return "off"
@@ -748,6 +788,8 @@ def _initialize_strike_rate_state(
         st.session_state.second_entry_autotune_result = None
     if "second_entry_autotune_message" not in st.session_state:
         st.session_state.second_entry_autotune_message = None
+    if "second_entry_autotune_panel" not in st.session_state:
+        st.session_state.second_entry_autotune_panel = None
     if "strike_sample_size" not in st.session_state:
         st.session_state.strike_sample_size = None
     if "autotune_sample_size" not in st.session_state:
@@ -1752,25 +1794,18 @@ def render_strike_rate_section(
         )
         if second_entry_results and any(second_entry_results.values()):
             st.session_state.second_entry_autotune_result = second_entry_results
+            st.session_state.second_entry_autotune_panel = _build_second_entry_autotune_panel(
+                second_entry_results
+            )
             st.session_state.second_entry_autotune_message = None
         else:
             st.session_state.second_entry_autotune_result = None
+            st.session_state.second_entry_autotune_panel = None
             st.session_state.second_entry_autotune_message = "No viable data for second-entry autotune"
-    if st.session_state.second_entry_autotune_result:
-        results = st.session_state.second_entry_autotune_result
-        for mode_label in ("additive", "sole"):
-            result = results.get(mode_label)
-            if not result:
-                continue
-            st.caption(
-                f"Second-entry {mode_label}: "
-                f"second_entry_threshold={result['second_entry_threshold']:.2f}, "
-                f"strike_rate={result['strike_rate']:.2f}%, "
-                f"win_rate_needed={result['win_rate_needed']:.2f}%, "
-                f"edge={result['edge']:.2f}%, "
-                f"trades={result['trade_count']}, "
-                f"expectancy={result['expectancy']:.4f}"
-            )
+    if st.session_state.second_entry_autotune_panel:
+        st.markdown("Second-entry autotune results")
+        panel_df = pd.DataFrame(st.session_state.second_entry_autotune_panel)
+        st.table(panel_df)
     elif st.session_state.second_entry_autotune_message:
         st.caption(st.session_state.second_entry_autotune_message)
 
