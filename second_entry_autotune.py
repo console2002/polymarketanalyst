@@ -108,7 +108,7 @@ def run_second_entry_autotune(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
-    second_entry_threshold_range=np.arange(0.60, 0.801, 0.02),
+    second_entry_threshold_range=np.arange(0.40, 0.701, 0.002),
     modes=("additive", "sole"),
     time_format=TIME_FORMAT,
     summary_segment="strike",
