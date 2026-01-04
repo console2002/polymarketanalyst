@@ -1,3 +1,5 @@
+import hashlib
+import json
 import numpy as np
 import os
 import streamlit as st
@@ -20,6 +22,7 @@ from second_entry_processing import calculate_market_trade_records_with_second_e
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) or os.getcwd()
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
+CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache", "second_entry")
 
 
 def add_vline_all_rows(fig, x, **kwargs):
@@ -229,7 +232,9 @@ def _load_data_file(data_file):
     signature = _get_file_signature(data_file)
     if signature is None:
         raise FileNotFoundError(data_file)
-    return _load_data_file_cached(*signature)
+    df = _load_data_file_cached(*signature)
+    df.attrs["data_signature"] = signature
+    return df
 
 
 def load_data(selected_date, files_by_date, legacy_path):
@@ -268,7 +273,90 @@ def load_all_data(files_by_date, legacy_path):
             file_signatures.append(signature)
     if not file_signatures:
         return None
-    return _load_all_data_cached(tuple(file_signatures))
+    df = _load_all_data_cached(tuple(file_signatures))
+    if df is not None:
+        df.attrs["data_signature"] = tuple(file_signatures)
+    return df
+
+
+def _ensure_second_entry_cache_dir():
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+def _hash_dataframe_signature(df, time_column):
+    if df is None or df.empty:
+        return {"shape": (0, 0), "hash": 0}
+    columns = [col for col in [time_column, "UpPrice", "DownPrice", "TargetTime", "TargetTime_dt"] if col in df.columns]
+    if not columns:
+        return {"shape": df.shape, "hash": 0}
+    hashed = pd.util.hash_pandas_object(df[columns], index=True)
+    return {"shape": df.shape, "hash": int(hashed.sum())}
+
+
+def _get_data_signature(df, time_column, precomputed_groups, precomputed_target_order):
+    if df is not None:
+        signature = getattr(df, "attrs", {}).get("data_signature")
+        if signature is not None:
+            return signature
+        return _hash_dataframe_signature(df, time_column)
+    if precomputed_groups is not None:
+        target_order = precomputed_target_order or list(precomputed_groups.keys())
+        target_signature = [str(target) for target in target_order]
+        return {"precomputed_targets": target_signature, "group_count": len(precomputed_groups)}
+    return "empty"
+
+
+def _build_second_entry_cache_key(
+    data_signature,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    second_entry_threshold,
+    second_entry_mode,
+):
+    payload = {
+        "data_signature": data_signature,
+        "minutes_after_open": int(minutes_after_open),
+        "entry_threshold": float(entry_threshold),
+        "hold_until_close_threshold": float(hold_until_close_threshold),
+        "second_entry_threshold": float(second_entry_threshold),
+        "second_entry_mode": str(second_entry_mode),
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _get_second_entry_cache_path(cache_key):
+    return os.path.join(CACHE_DIR, f"{cache_key}.csv")
+
+
+def _load_second_entry_cache(cache_path):
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        cached_df = pd.read_csv(cache_path)
+    except Exception:
+        return None
+    datetime_columns = [
+        "target_time_dt",
+        "market_open",
+        "open_threshold_time",
+        "market_close_time",
+        "trigger_time",
+        "second_entry_time",
+        "entry_time",
+        "exit_time",
+    ]
+    for column in datetime_columns:
+        if column in cached_df.columns:
+            cached_df[column] = pd.to_datetime(cached_df[column], errors="coerce")
+    return cached_df.to_dict("records")
+
+
+def _write_second_entry_cache(cache_path, trade_records):
+    _ensure_second_entry_cache_dir()
+    cached_df = pd.DataFrame(trade_records)
+    cached_df.to_csv(cache_path, index=False)
 
 # Top-row controls
 files_by_date, legacy_path = _get_available_data_files()
@@ -329,8 +417,22 @@ def _calculate_trade_records(
     precomputed_target_order=None,
 ):
     normalized_mode = _normalize_second_entry_mode(second_entry_mode)
+    data_signature = _get_data_signature(df, time_column, precomputed_groups, precomputed_target_order)
+    cache_key = _build_second_entry_cache_key(
+        data_signature,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        second_entry_threshold,
+        normalized_mode,
+    )
+    cache_path = _get_second_entry_cache_path(cache_key)
+    cached_records = _load_second_entry_cache(cache_path)
+    if cached_records is not None:
+        return cached_records
+
     if normalized_mode == "off":
-        return calculate_market_trade_records(
+        trade_records = calculate_market_trade_records(
             df,
             time_column,
             minutes_after_open,
@@ -341,19 +443,23 @@ def _calculate_trade_records(
             precomputed_groups=precomputed_groups,
             precomputed_target_order=precomputed_target_order,
         )
-    return calculate_market_trade_records_with_second_entry(
-        df,
-        time_column,
-        minutes_after_open,
-        entry_threshold,
-        hold_until_close_threshold,
-        TIME_FORMAT,
-        second_entry_threshold,
-        normalized_mode,
-        target_order=target_order,
-        precomputed_groups=precomputed_groups,
-        precomputed_target_order=precomputed_target_order,
-    )
+    else:
+        trade_records = calculate_market_trade_records_with_second_entry(
+            df,
+            time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+            TIME_FORMAT,
+            second_entry_threshold,
+            normalized_mode,
+            target_order=target_order,
+            precomputed_groups=precomputed_groups,
+            precomputed_target_order=precomputed_target_order,
+        )
+
+    _write_second_entry_cache(cache_path, trade_records)
+    return trade_records
 
 
 
