@@ -358,6 +358,34 @@ def _write_second_entry_cache(cache_path, trade_records):
     _ensure_second_entry_cache_dir()
     cached_df = pd.DataFrame(trade_records)
     cached_df.to_csv(cache_path, index=False)
+    _prune_second_entry_cache_dir(keep_paths={cache_path})
+
+
+def _prune_second_entry_cache_dir(keep_paths=None, max_entries=5):
+    if not os.path.isdir(CACHE_DIR):
+        return
+    keep_paths = {os.path.abspath(path) for path in (keep_paths or set())}
+    cache_files = []
+    for filename in os.listdir(CACHE_DIR):
+        if not filename.endswith(".csv"):
+            continue
+        cache_path = os.path.join(CACHE_DIR, filename)
+        if os.path.abspath(cache_path) in keep_paths:
+            continue
+        try:
+            modified_time = os.path.getmtime(cache_path)
+        except OSError:
+            continue
+        cache_files.append((modified_time, cache_path))
+    allowed_other = max(0, max_entries - len(keep_paths))
+    if len(cache_files) <= allowed_other:
+        return
+    cache_files.sort()
+    for _, cache_path in cache_files[: len(cache_files) - allowed_other]:
+        try:
+            os.remove(cache_path)
+        except OSError:
+            continue
 
 # Top-row controls
 files_by_date, legacy_path = _get_available_data_files()

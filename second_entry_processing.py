@@ -109,6 +109,7 @@ def calculate_market_trade_records_with_second_entry(
     time_format,
     second_entry_threshold,
     second_entry_mode,
+    use_cache=True,
     target_order=None,
     precomputed_groups=None,
     precomputed_target_order=None,
@@ -116,18 +117,20 @@ def calculate_market_trade_records_with_second_entry(
     if (df is None or df.empty) and not precomputed_groups:
         return []
 
-    data_signature = _get_data_signature(df, time_column, precomputed_groups, precomputed_target_order)
-    cache_key = _build_second_entry_cache_key(
-        data_signature,
-        entry_threshold,
-        hold_until_close_threshold,
-        second_entry_threshold,
-        second_entry_mode,
-    )
-    cache_path = _get_second_entry_cache_path(cache_key)
-    cached_records = _load_second_entry_cache(cache_path)
-    if cached_records is not None:
-        return cached_records
+    cache_path = None
+    if use_cache:
+        data_signature = _get_data_signature(df, time_column, precomputed_groups, precomputed_target_order)
+        cache_key = _build_second_entry_cache_key(
+            data_signature,
+            entry_threshold,
+            hold_until_close_threshold,
+            second_entry_threshold,
+            second_entry_mode,
+        )
+        cache_path = _get_second_entry_cache_path(cache_key)
+        cached_records = _load_second_entry_cache(cache_path)
+        if cached_records is not None:
+            return cached_records
 
     if precomputed_groups is None:
         df = df.copy()
@@ -311,7 +314,8 @@ def calculate_market_trade_records_with_second_entry(
                 }
             )
 
-    _write_second_entry_cache(cache_path, records)
+    if cache_path:
+        _write_second_entry_cache(cache_path, records)
     return records
 
 
@@ -324,6 +328,7 @@ def calculate_market_trade_records(
     time_format,
     second_entry_threshold,
     second_entry_mode,
+    use_cache=True,
     target_order=None,
     precomputed_groups=None,
     precomputed_target_order=None,
@@ -337,6 +342,7 @@ def calculate_market_trade_records(
         time_format,
         second_entry_threshold,
         second_entry_mode,
+        use_cache=use_cache,
         target_order=target_order,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
