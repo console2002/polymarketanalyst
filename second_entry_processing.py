@@ -188,6 +188,7 @@ def calculate_market_trade_records_with_second_entry(
         entry_price = None
         second_entry_time = None
         second_entry_price = None
+        second_entry_taken = False
         trade_executed = False
         if expected_side and trigger_time is not None:
             side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
@@ -197,20 +198,23 @@ def calculate_market_trade_records_with_second_entry(
                 trade_executed = True
             else:
                 eligible_after_trigger = eligible[eligible[time_column] >= trigger_time]
-                pullback_index = _find_pullback_crossing(eligible_after_trigger[side_column], second_threshold)
-                if pullback_index is not None:
-                    second_entry_time = eligible_after_trigger.loc[pullback_index, time_column]
-                    second_entry_price = eligible_after_trigger.loc[pullback_index, side_column]
+                if not second_entry_taken:
+                    pullback_index = _find_pullback_crossing(eligible_after_trigger[side_column], second_threshold)
+                    if pullback_index is not None:
+                        second_entry_time = eligible_after_trigger.loc[pullback_index, time_column]
+                        second_entry_price = eligible_after_trigger.loc[pullback_index, side_column]
+                        if second_entry_price is not None and not pd.isna(second_entry_price):
+                            second_entry_taken = True
 
                 if entry_mode == "additive":
                     entry_time = trigger_time
-                    if second_entry_price is not None and not pd.isna(second_entry_price):
+                    if second_entry_taken:
                         entry_price = np.mean([trigger_price, second_entry_price])
                     else:
                         entry_price = trigger_price
                     trade_executed = True
                 elif entry_mode == "sole":
-                    if second_entry_price is not None and not pd.isna(second_entry_price):
+                    if second_entry_taken:
                         entry_time = second_entry_time
                         entry_price = second_entry_price
                         trade_executed = True
