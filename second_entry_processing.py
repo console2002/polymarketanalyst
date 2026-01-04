@@ -200,3 +200,31 @@ def calculate_market_trade_records_with_second_entry(
         )
 
     return records
+
+
+def calculate_market_trade_records(
+    df,
+    time_column,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    time_format,
+    second_entry_threshold,
+    second_entry_mode,
+    target_order=None,
+    precomputed_groups=None,
+    precomputed_target_order=None,
+):
+    return calculate_market_trade_records_with_second_entry(
+        df,
+        time_column,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        time_format,
+        second_entry_threshold,
+        second_entry_mode,
+        target_order=target_order,
+        precomputed_groups=precomputed_groups,
+        precomputed_target_order=precomputed_target_order,
+    )
