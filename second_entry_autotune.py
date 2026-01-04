@@ -50,6 +50,7 @@ def _calculate_strike_rate_metrics(
         time_format,
         second_entry_threshold,
         second_entry_mode,
+        use_cache=False,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
     )
@@ -183,6 +184,7 @@ def run_second_entry_autotune(
                 time_format,
                 best_result["second_entry_threshold"],
                 mode,
+                use_cache=False,
                 precomputed_groups=precomputed_groups,
                 precomputed_target_order=precomputed_target_order,
             )
