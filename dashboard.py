@@ -13,6 +13,7 @@ from dashboard_metrics import (
     summarize_profit_loss,
 )
 from dashboard_processing import align_market_open, calculate_market_trade_records
+from second_entry_processing import calculate_market_trade_records_with_second_entry
 
 
 # Get the directory of the current script
@@ -103,6 +104,24 @@ hold_until_close_threshold = st.sidebar.number_input(
     value=0.80,
     step=0.01,
     format="%.2f",
+)
+second_entry_mode = st.sidebar.selectbox(
+    "Second entry mode",
+    options=("Off", "Additive", "Sole"),
+    index=0,
+    key="second_entry_mode",
+    help="Enable pullback-based second entry processing for new trades.",
+)
+second_entry_threshold = st.sidebar.number_input(
+    "Second entry threshold",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.60,
+    step=0.01,
+    format="%.2f",
+    key="second_entry_threshold",
+    help="Threshold used when second entry mode is Additive or Sole.",
+    disabled=second_entry_mode == "Off",
 )
 resample_interval = st.sidebar.selectbox(
     "Resample interval",
@@ -291,6 +310,51 @@ def _format_metric(value, formatter):
     except (TypeError, ValueError):
         return "N/A"
 
+def _normalize_second_entry_mode(mode):
+    if not mode:
+        return "off"
+    return str(mode).strip().lower()
+
+
+def _calculate_trade_records(
+    df,
+    time_column,
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
+    target_order=None,
+    precomputed_groups=None,
+    precomputed_target_order=None,
+):
+    normalized_mode = _normalize_second_entry_mode(second_entry_mode)
+    if normalized_mode == "off":
+        return calculate_market_trade_records(
+            df,
+            time_column,
+            minutes_after_open,
+            entry_threshold,
+            hold_until_close_threshold,
+            TIME_FORMAT,
+            target_order=target_order,
+            precomputed_groups=precomputed_groups,
+            precomputed_target_order=precomputed_target_order,
+        )
+    return calculate_market_trade_records_with_second_entry(
+        df,
+        time_column,
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        TIME_FORMAT,
+        second_entry_threshold,
+        normalized_mode,
+        target_order=target_order,
+        precomputed_groups=precomputed_groups,
+        precomputed_target_order=precomputed_target_order,
+    )
+
 
 
 
@@ -328,17 +392,20 @@ def _calculate_strike_rate_metrics(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
     history_segment="strike",
     precomputed_groups=None,
     precomputed_target_order=None,
 ):
-    trade_records = calculate_market_trade_records(
+    trade_records = _calculate_trade_records(
         df,
         time_column,
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
-        TIME_FORMAT,
+        second_entry_mode,
+        second_entry_threshold,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
     )
@@ -376,17 +443,20 @@ def _calculate_window_summary(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
     trade_value_usd,
 ):
     summary_rows = []
     loss_targets = []
-    trade_records = calculate_market_trade_records(
+    trade_records = _calculate_trade_records(
         df,
         time_column,
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
-        TIME_FORMAT,
+        second_entry_mode,
+        second_entry_threshold,
     )
 
     for record in trade_records:
@@ -441,6 +511,8 @@ def _find_latest_loss_target(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
     trade_value_usd,
 ):
     _, latest_loss_target = _calculate_window_summary(
@@ -449,12 +521,20 @@ def _find_latest_loss_target(
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
+        second_entry_mode,
+        second_entry_threshold,
         trade_value_usd,
     )
     return latest_loss_target
 
 
-def _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold):
+def _initialize_strike_rate_state(
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
+):
     if "last_market_open" not in st.session_state:
         st.session_state.last_market_open = pd.NaT
     if "strike_rate" not in st.session_state:
@@ -467,6 +547,10 @@ def _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_unti
         st.session_state.last_entry_threshold = entry_threshold
     if "last_hold_until_close_threshold" not in st.session_state:
         st.session_state.last_hold_until_close_threshold = hold_until_close_threshold
+    if "last_second_entry_mode" not in st.session_state:
+        st.session_state.last_second_entry_mode = _normalize_second_entry_mode(second_entry_mode)
+    if "last_second_entry_threshold" not in st.session_state:
+        st.session_state.last_second_entry_threshold = second_entry_threshold
     if "autotune_result" not in st.session_state:
         st.session_state.autotune_result = None
     if "autotune_message" not in st.session_state:
@@ -482,6 +566,8 @@ def _should_recalculate_strike_rate(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
 ):
     should_recalculate = not st.session_state.strike_rate_initialized
     last_market_open = st.session_state.last_market_open
@@ -501,10 +587,19 @@ def _should_recalculate_strike_rate(
     hold_until_close_threshold_changed = (
         hold_until_close_threshold != st.session_state.last_hold_until_close_threshold
     )
+    second_entry_mode_changed = (
+        _normalize_second_entry_mode(second_entry_mode)
+        != st.session_state.last_second_entry_mode
+    )
+    second_entry_threshold_changed = (
+        second_entry_threshold != st.session_state.last_second_entry_threshold
+    )
     if (
         minutes_after_open_changed
         or entry_threshold_changed
         or hold_until_close_threshold_changed
+        or second_entry_mode_changed
+        or second_entry_threshold_changed
     ):
         should_recalculate = True
     return should_recalculate
@@ -516,16 +611,26 @@ def _update_strike_rate_state(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
     current_open,
     precomputed_groups=None,
     precomputed_target_order=None,
 ):
-    _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
+    _initialize_strike_rate_state(
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        second_entry_mode,
+        second_entry_threshold,
+    )
     should_recalculate = _should_recalculate_strike_rate(
         current_open,
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
+        second_entry_mode,
+        second_entry_threshold,
     )
     if should_recalculate:
         (
@@ -541,6 +646,8 @@ def _update_strike_rate_state(
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
+            second_entry_mode,
+            second_entry_threshold,
             history_segment="strike",
             precomputed_groups=precomputed_groups,
             precomputed_target_order=precomputed_target_order,
@@ -551,6 +658,8 @@ def _update_strike_rate_state(
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
+            second_entry_mode,
+            second_entry_threshold,
             history_segment="autotune",
             precomputed_groups=precomputed_groups,
             precomputed_target_order=precomputed_target_order,
@@ -567,15 +676,27 @@ def _update_strike_rate_state(
         st.session_state.last_minutes_after_open = minutes_after_open
         st.session_state.last_entry_threshold = entry_threshold
         st.session_state.last_hold_until_close_threshold = hold_until_close_threshold
+        st.session_state.last_second_entry_mode = _normalize_second_entry_mode(second_entry_mode)
+        st.session_state.last_second_entry_threshold = second_entry_threshold
 
 
-def _initialize_window_summary_state(minutes_after_open, entry_threshold, hold_until_close_threshold):
+def _initialize_window_summary_state(
+    minutes_after_open,
+    entry_threshold,
+    hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
+):
     if "window_summary_minutes_after_open" not in st.session_state:
         st.session_state.window_summary_minutes_after_open = minutes_after_open
     if "window_summary_entry_threshold" not in st.session_state:
         st.session_state.window_summary_entry_threshold = entry_threshold
     if "window_summary_hold_until_close_threshold" not in st.session_state:
         st.session_state.window_summary_hold_until_close_threshold = hold_until_close_threshold
+    if "window_summary_second_entry_mode" not in st.session_state:
+        st.session_state.window_summary_second_entry_mode = _normalize_second_entry_mode(second_entry_mode)
+    if "window_summary_second_entry_threshold" not in st.session_state:
+        st.session_state.window_summary_second_entry_threshold = second_entry_threshold
     if "window_summary_rows" not in st.session_state:
         st.session_state.window_summary_rows = []
     if "window_summary_last_updated" not in st.session_state:
@@ -592,10 +713,18 @@ def _update_window_summary_state(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
     trade_value_usd,
     current_open,
 ):
-    _initialize_window_summary_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
+    _initialize_window_summary_state(
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        second_entry_mode,
+        second_entry_threshold,
+    )
     minutes_after_open_changed = (
         minutes_after_open != st.session_state.window_summary_minutes_after_open
     )
@@ -605,10 +734,19 @@ def _update_window_summary_state(
     hold_until_close_threshold_changed = (
         hold_until_close_threshold != st.session_state.window_summary_hold_until_close_threshold
     )
+    second_entry_mode_changed = (
+        _normalize_second_entry_mode(second_entry_mode)
+        != st.session_state.window_summary_second_entry_mode
+    )
+    second_entry_threshold_changed = (
+        second_entry_threshold != st.session_state.window_summary_second_entry_threshold
+    )
     recalculate_window_summary = (
         minutes_after_open_changed
         or entry_threshold_changed
         or hold_until_close_threshold_changed
+        or second_entry_mode_changed
+        or second_entry_threshold_changed
         or not st.session_state.window_summary_rows
     )
     if (
@@ -628,6 +766,8 @@ def _update_window_summary_state(
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
+            second_entry_mode,
+            second_entry_threshold,
             trade_value_usd,
         )
         if latest_loss_target is not None:
@@ -646,6 +786,8 @@ def _update_window_summary_state(
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
+            second_entry_mode,
+            second_entry_threshold,
             trade_value_usd,
         )
         st.session_state.window_summary_rows = summary_rows
@@ -654,6 +796,8 @@ def _update_window_summary_state(
         st.session_state.window_summary_minutes_after_open = minutes_after_open
         st.session_state.window_summary_entry_threshold = entry_threshold
         st.session_state.window_summary_hold_until_close_threshold = hold_until_close_threshold
+        st.session_state.window_summary_second_entry_mode = _normalize_second_entry_mode(second_entry_mode)
+        st.session_state.window_summary_second_entry_threshold = second_entry_threshold
         st.session_state.window_summary_last_market_open = current_open
 
 
@@ -661,6 +805,8 @@ def _initialize_summary_refresh_state(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
     trade_value_usd,
     test_balance_start,
 ):
@@ -674,6 +820,10 @@ def _initialize_summary_refresh_state(
         st.session_state.summary_entry_threshold = entry_threshold
     if "summary_hold_until_close_threshold" not in st.session_state:
         st.session_state.summary_hold_until_close_threshold = hold_until_close_threshold
+    if "summary_second_entry_mode" not in st.session_state:
+        st.session_state.summary_second_entry_mode = _normalize_second_entry_mode(second_entry_mode)
+    if "summary_second_entry_threshold" not in st.session_state:
+        st.session_state.summary_second_entry_threshold = second_entry_threshold
     if "summary_trade_value_usd" not in st.session_state:
         st.session_state.summary_trade_value_usd = trade_value_usd
     if "summary_test_balance_start" not in st.session_state:
@@ -689,6 +839,8 @@ def _should_recalculate_summary(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
     trade_value_usd,
     test_balance_start,
 ):
@@ -701,6 +853,9 @@ def _should_recalculate_summary(
         minutes_after_open != st.session_state.summary_minutes_after_open
         or entry_threshold != st.session_state.summary_entry_threshold
         or hold_until_close_threshold != st.session_state.summary_hold_until_close_threshold
+        or _normalize_second_entry_mode(second_entry_mode)
+        != st.session_state.summary_second_entry_mode
+        or second_entry_threshold != st.session_state.summary_second_entry_threshold
         or trade_value_usd != st.session_state.summary_trade_value_usd
         or test_balance_start != st.session_state.summary_test_balance_start
     ):
@@ -810,6 +965,8 @@ def render_probability_history(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
 ):
     df_window = chart_data["df_window"]
     max_offset = chart_data["max_offset"]
@@ -898,13 +1055,14 @@ def render_probability_history(
 
     ordered_targets = df_window["TargetTime_dt"].dropna().drop_duplicates().tolist()
     full_target_dt_order = df["TargetTime_dt"].dropna().drop_duplicates().tolist()
-    trade_records = calculate_market_trade_records(
+    trade_records = _calculate_trade_records(
         df_window,
         time_column,
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
-        TIME_FORMAT,
+        second_entry_mode,
+        second_entry_threshold,
         target_order=full_target_dt_order,
     )
     trade_record_map = {record["target_time_dt"]: record for record in trade_records}
@@ -1084,6 +1242,8 @@ def compute_summary_state(
     minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
+    second_entry_mode,
+    second_entry_threshold,
     trade_value_usd,
     test_balance_start,
     summary_reference_time,
@@ -1092,13 +1252,21 @@ def compute_summary_state(
     precomputed_groups=None,
     precomputed_target_order=None,
 ):
-    _initialize_strike_rate_state(minutes_after_open, entry_threshold, hold_until_close_threshold)
+    _initialize_strike_rate_state(
+        minutes_after_open,
+        entry_threshold,
+        hold_until_close_threshold,
+        second_entry_mode,
+        second_entry_threshold,
+    )
     _update_strike_rate_state(
         history_df,
         history_time_column,
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
+        second_entry_mode,
+        second_entry_threshold,
         current_open,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
@@ -1118,6 +1286,8 @@ def compute_summary_state(
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
+        second_entry_mode,
+        second_entry_threshold,
         trade_value_usd,
         current_open,
     )
@@ -1126,6 +1296,8 @@ def compute_summary_state(
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
+        second_entry_mode,
+        second_entry_threshold,
         trade_value_usd,
         test_balance_start,
     )
@@ -1134,19 +1306,22 @@ def compute_summary_state(
         minutes_after_open,
         entry_threshold,
         hold_until_close_threshold,
+        second_entry_mode,
+        second_entry_threshold,
         trade_value_usd,
         test_balance_start,
     )
     profit_loss_summary = st.session_state.profit_loss_summary
     drawdown_summary = st.session_state.drawdown_summary
     if recalculate_summary and history_df is not None and not history_df.empty:
-        profit_loss_trade_records = calculate_market_trade_records(
+        profit_loss_trade_records = _calculate_trade_records(
             history_df,
             history_time_column,
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
-            TIME_FORMAT,
+            second_entry_mode,
+            second_entry_threshold,
         )
         closed_trades = build_trade_pnl_records(profit_loss_trade_records, trade_value_usd)
         profit_loss_summary = summarize_profit_loss(
@@ -1167,6 +1342,8 @@ def compute_summary_state(
         st.session_state.summary_minutes_after_open = minutes_after_open
         st.session_state.summary_entry_threshold = entry_threshold
         st.session_state.summary_hold_until_close_threshold = hold_until_close_threshold
+        st.session_state.summary_second_entry_mode = _normalize_second_entry_mode(second_entry_mode)
+        st.session_state.summary_second_entry_threshold = second_entry_threshold
         st.session_state.summary_trade_value_usd = trade_value_usd
         st.session_state.summary_test_balance_start = test_balance_start
 
@@ -1189,6 +1366,8 @@ def render_strike_rate_section(
     summary_state,
     history_df,
     history_time_column,
+    second_entry_mode,
+    second_entry_threshold,
     precomputed_groups=None,
     precomputed_target_order=None,
 ):
@@ -1286,6 +1465,8 @@ def render_strike_rate_section(
                     minutes,
                     threshold,
                     hold_threshold,
+                    second_entry_mode,
+                    second_entry_threshold,
                     history_segment="autotune",
                     precomputed_groups=precomputed_groups,
                     precomputed_target_order=precomputed_target_order,
@@ -1453,6 +1634,8 @@ def render_dashboard():
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
+            second_entry_mode,
+            second_entry_threshold,
             trade_value_usd,
             test_balance_start,
             summary_reference_time,
@@ -1477,6 +1660,8 @@ def render_dashboard():
                 summary_state,
                 history_df,
                 history_time_column,
+                second_entry_mode,
+                second_entry_threshold,
                 precomputed_groups=history_market_groups,
                 precomputed_target_order=history_target_order,
             )
@@ -1500,6 +1685,8 @@ def render_dashboard():
             minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
+            second_entry_mode,
+            second_entry_threshold,
         )
 
         with st.expander("Window summary"):
