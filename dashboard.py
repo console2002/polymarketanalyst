@@ -9,6 +9,7 @@ from plotly.subplots import make_subplots
 import datetime
 import re
 from autotune import run_autotune
+from second_entry_autotune import run_second_entry_autotune
 from dashboard_metrics import (
     build_trade_pnl_records,
     summarize_drawdowns,
@@ -743,6 +744,10 @@ def _initialize_strike_rate_state(
         st.session_state.autotune_result = None
     if "autotune_message" not in st.session_state:
         st.session_state.autotune_message = None
+    if "second_entry_autotune_result" not in st.session_state:
+        st.session_state.second_entry_autotune_result = None
+    if "second_entry_autotune_message" not in st.session_state:
+        st.session_state.second_entry_autotune_message = None
     if "strike_sample_size" not in st.session_state:
         st.session_state.strike_sample_size = None
     if "autotune_sample_size" not in st.session_state:
@@ -1715,6 +1720,59 @@ def render_strike_rate_section(
         )
     elif st.session_state.autotune_message:
         st.caption(st.session_state.autotune_message)
+    second_entry_autotune_clicked = st.button(
+        "Run Second-Entry Autotune",
+        key="second_entry_autotune_button",
+        use_container_width=True,
+    )
+    if second_entry_autotune_clicked:
+        second_entry_progress_container = st.empty()
+        second_entry_status_container = st.status("Second-entry autotuning…", expanded=True)
+        second_entry_progress_bar = second_entry_progress_container.progress(0)
+
+        def _second_entry_progress_callback(current_step, total_steps, message):
+            second_entry_progress_bar.progress(current_step / total_steps)
+            second_entry_status_container.write(message)
+
+        with second_entry_status_container:
+            second_entry_results = run_second_entry_autotune(
+                history_df,
+                history_time_column,
+                minutes_after_open,
+                entry_threshold,
+                hold_until_close_threshold,
+                progress_callback=_second_entry_progress_callback,
+                precomputed_groups=precomputed_groups,
+                precomputed_target_order=precomputed_target_order,
+            )
+        second_entry_progress_container.empty()
+        second_entry_status_container.update(
+            state="complete",
+            label="Second-entry autotune complete",
+        )
+        if second_entry_results and any(second_entry_results.values()):
+            st.session_state.second_entry_autotune_result = second_entry_results
+            st.session_state.second_entry_autotune_message = None
+        else:
+            st.session_state.second_entry_autotune_result = None
+            st.session_state.second_entry_autotune_message = "No viable data for second-entry autotune"
+    if st.session_state.second_entry_autotune_result:
+        results = st.session_state.second_entry_autotune_result
+        for mode_label in ("additive", "sole"):
+            result = results.get(mode_label)
+            if not result:
+                continue
+            st.caption(
+                f"Second-entry {mode_label}: "
+                f"second_entry_threshold={result['second_entry_threshold']:.2f}, "
+                f"strike_rate={result['strike_rate']:.2f}%, "
+                f"win_rate_needed={result['win_rate_needed']:.2f}%, "
+                f"edge={result['edge']:.2f}%, "
+                f"trades={result['trade_count']}, "
+                f"expectancy={result['expectancy']:.4f}"
+            )
+    elif st.session_state.second_entry_autotune_message:
+        st.caption(st.session_state.second_entry_autotune_message)
 
 
 def render_profit_loss_section(summary_state):
