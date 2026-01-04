@@ -1,3 +1,7 @@
+import hashlib
+import json
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -7,6 +11,8 @@ from dashboard_processing import (
     align_market_open,
 )
 
+CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache", "second_entry")
+
 
 def _find_pullback_crossing(series, threshold):
     below = series <= threshold
@@ -14,6 +20,84 @@ def _find_pullback_crossing(series, threshold):
     if crossings.any():
         return crossings[crossings].index[0]
     return None
+
+
+def _ensure_cache_dir():
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+def _hash_dataframe_signature(df, time_column):
+    if df is None or df.empty:
+        return {"shape": (0, 0), "hash": 0}
+    columns = [col for col in [time_column, "UpPrice", "DownPrice", "TargetTime", "TargetTime_dt"] if col in df.columns]
+    if not columns:
+        return {"shape": df.shape, "hash": 0}
+    hashed = pd.util.hash_pandas_object(df[columns], index=True)
+    return {"shape": df.shape, "hash": int(hashed.sum())}
+
+
+def _get_data_signature(df, time_column, precomputed_groups, precomputed_target_order):
+    if df is not None:
+        signature = getattr(df, "attrs", {}).get("data_signature")
+        if signature is not None:
+            return signature
+        return _hash_dataframe_signature(df, time_column)
+    if precomputed_groups is not None:
+        target_order = precomputed_target_order or list(precomputed_groups.keys())
+        target_signature = [str(target) for target in target_order]
+        return {"precomputed_targets": target_signature, "group_count": len(precomputed_groups)}
+    return "empty"
+
+
+def _build_second_entry_cache_key(
+    data_signature,
+    entry_threshold,
+    hold_until_close_threshold,
+    second_entry_threshold,
+    second_entry_mode,
+):
+    payload = {
+        "data_signature": data_signature,
+        "entry_threshold": float(entry_threshold),
+        "hold_until_close_threshold": float(hold_until_close_threshold),
+        "second_entry_threshold": float(second_entry_threshold),
+        "second_entry_mode": str(second_entry_mode),
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _get_second_entry_cache_path(cache_key):
+    return os.path.join(CACHE_DIR, f"{cache_key}.csv")
+
+
+def _load_second_entry_cache(cache_path):
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        cached_df = pd.read_csv(cache_path)
+    except Exception:
+        return None
+    datetime_columns = [
+        "target_time_dt",
+        "market_open",
+        "open_threshold_time",
+        "market_close_time",
+        "trigger_time",
+        "second_entry_time",
+        "entry_time",
+        "exit_time",
+    ]
+    for column in datetime_columns:
+        if column in cached_df.columns:
+            cached_df[column] = pd.to_datetime(cached_df[column], errors="coerce")
+    return cached_df.to_dict("records")
+
+
+def _write_second_entry_cache(cache_path, trade_records):
+    _ensure_cache_dir()
+    cached_df = pd.DataFrame(trade_records)
+    cached_df.to_csv(cache_path, index=False)
 
 
 def calculate_market_trade_records_with_second_entry(
@@ -31,6 +115,19 @@ def calculate_market_trade_records_with_second_entry(
 ):
     if (df is None or df.empty) and not precomputed_groups:
         return []
+
+    data_signature = _get_data_signature(df, time_column, precomputed_groups, precomputed_target_order)
+    cache_key = _build_second_entry_cache_key(
+        data_signature,
+        entry_threshold,
+        hold_until_close_threshold,
+        second_entry_threshold,
+        second_entry_mode,
+    )
+    cache_path = _get_second_entry_cache_path(cache_key)
+    cached_records = _load_second_entry_cache(cache_path)
+    if cached_records is not None:
+        return cached_records
 
     if precomputed_groups is None:
         df = df.copy()
@@ -199,6 +296,7 @@ def calculate_market_trade_records_with_second_entry(
             }
         )
 
+    _write_second_entry_cache(cache_path, records)
     return records
 
 
