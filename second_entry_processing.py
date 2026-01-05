@@ -228,12 +228,7 @@ def calculate_market_trade_records_with_second_entry(
                     trade_executed = entry_time is not None and entry_price is not None
                 elif entry_mode == "additive":
                     entry_time = trigger_time
-                    if second_entry_taken:
-                        if trigger_price is not None and second_entry_price is not None:
-                            entry_price = np.mean([trigger_price, second_entry_price])
-                            position_multiplier = 2
-                    else:
-                        entry_price = trigger_price
+                    entry_price = trigger_price
                     trade_executed = entry_time is not None and entry_price is not None
 
         close_up, close_down = _get_close_prices(market_group, time_column)
@@ -267,6 +262,15 @@ def calculate_market_trade_records_with_second_entry(
             if exit_time == market_close_time:
                 exit_price = close_up if expected_side == "Up" else close_down
                 exit_price_market = exit_price
+
+        if entry_mode == "additive" and second_entry_taken:
+            if second_entry_time is None or exit_time is None or second_entry_time > exit_time:
+                second_entry_taken = False
+                second_entry_time = None
+                second_entry_price = None
+            elif trigger_price is not None and second_entry_price is not None:
+                entry_price = np.mean([trigger_price, second_entry_price])
+                position_multiplier = 2
 
         outcome = None
         if market_closed:
