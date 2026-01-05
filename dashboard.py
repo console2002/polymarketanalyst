@@ -1715,7 +1715,7 @@ def compute_summary_state(
         hold_until_close_threshold,
         "off",
         second_entry_threshold,
-        allow_compute=False,
+        allow_compute=True,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
     )
