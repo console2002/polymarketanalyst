@@ -594,19 +594,19 @@ def _summarize_trade_record_metrics(trade_records, trade_value_usd):
     trade_count = len(closed_records)
     wins = sum(1 for record in closed_records if record.get("outcome") == "Win")
     win_rate = (wins / trade_count * 100) if trade_count else np.nan
-    entry_prices = [record["entry_price"] for record in closed_records]
-    if entry_prices:
-        avg_entry_price = sum(entry_prices) / len(entry_prices)
-        gain = 1 - avg_entry_price
-        loss = 1.0
-        win_rate_needed = loss / (gain + loss) * 100
-    else:
-        win_rate_needed = np.nan
-    edge = win_rate - win_rate_needed if not pd.isna(win_rate) and not pd.isna(win_rate_needed) else np.nan
     pnl_values = [
         _calculate_trade_pnl_usd(record, trade_value_usd)
         for record in closed_records
     ]
+    win_pnl_values = [pnl for pnl in pnl_values if pnl > 0]
+    loss_pnl_values = [abs(pnl) for pnl in pnl_values if pnl <= 0]
+    avg_win = (sum(win_pnl_values) / len(win_pnl_values)) if win_pnl_values else np.nan
+    avg_loss = (sum(loss_pnl_values) / len(loss_pnl_values)) if loss_pnl_values else np.nan
+    if not pd.isna(avg_win) and not pd.isna(avg_loss) and avg_win > 0 and avg_loss > 0:
+        win_rate_needed = avg_loss / (avg_win + avg_loss) * 100
+    else:
+        win_rate_needed = np.nan
+    edge = win_rate - win_rate_needed if not pd.isna(win_rate) and not pd.isna(win_rate_needed) else np.nan
     expectancy = (sum(pnl_values) / len(pnl_values)) if pnl_values else np.nan
     return {
         "trade_count": trade_count,
@@ -665,6 +665,7 @@ def _calculate_strike_rate_metrics(
     hold_until_close_threshold,
     second_entry_mode,
     second_entry_threshold,
+    trade_value_usd,
     history_segment="strike",
     precomputed_groups=None,
     precomputed_target_order=None,
@@ -692,14 +693,27 @@ def _calculate_strike_rate_metrics(
     trade_count = len(trade_records)
     wins = sum(1 for record in trade_records if record["outcome"] == "Win")
     strike_rate = (wins / trade_count * 100) if trade_count else np.nan
+    pnl_values = [
+        _calculate_trade_pnl_usd(record, trade_value_usd)
+        for record in trade_records
+        if record["entry_price"] is not None
+        and record["exit_price"] is not None
+        and not pd.isna(record["entry_price"])
+        and not pd.isna(record["exit_price"])
+    ]
+    win_pnl_values = [pnl for pnl in pnl_values if pnl > 0]
+    loss_pnl_values = [abs(pnl) for pnl in pnl_values if pnl <= 0]
+    avg_win = (sum(win_pnl_values) / len(win_pnl_values)) if win_pnl_values else np.nan
+    avg_loss = (sum(loss_pnl_values) / len(loss_pnl_values)) if loss_pnl_values else np.nan
     entry_prices = [record["entry_price"] for record in trade_records if record["entry_price"] is not None]
+    if not pd.isna(avg_win) and not pd.isna(avg_loss) and avg_win > 0 and avg_loss > 0:
+        win_rate_needed = avg_loss / (avg_win + avg_loss) * 100
+    else:
+        win_rate_needed = np.nan
     if entry_prices:
         avg_entry_price = sum(entry_prices) / len(entry_prices)
         min_entry_price = min(entry_prices)
         max_entry_price = max(entry_prices)
-        gain = 1 - avg_entry_price
-        loss = 1.0
-        win_rate_needed = loss / (gain + loss) * 100
     else:
         avg_entry_price = np.nan
         min_entry_price = np.nan
@@ -904,6 +918,7 @@ def _update_strike_rate_state(
     hold_until_close_threshold,
     second_entry_mode,
     second_entry_threshold,
+    trade_value_usd,
     current_open,
     precomputed_groups=None,
     precomputed_target_order=None,
@@ -939,6 +954,7 @@ def _update_strike_rate_state(
             hold_until_close_threshold,
             second_entry_mode,
             second_entry_threshold,
+            trade_value_usd,
             history_segment="strike",
             precomputed_groups=precomputed_groups,
             precomputed_target_order=precomputed_target_order,
@@ -951,6 +967,7 @@ def _update_strike_rate_state(
             hold_until_close_threshold,
             second_entry_mode,
             second_entry_threshold,
+            trade_value_usd,
             history_segment="autotune",
             precomputed_groups=precomputed_groups,
             precomputed_target_order=precomputed_target_order,
@@ -1581,6 +1598,7 @@ def compute_summary_state(
         hold_until_close_threshold,
         second_entry_mode,
         second_entry_threshold,
+        trade_value_usd,
         current_open,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
@@ -1809,6 +1827,7 @@ def render_strike_rate_section(
                     hold_threshold,
                     second_entry_mode,
                     second_entry_threshold,
+                    trade_value_usd,
                     history_segment="autotune",
                     precomputed_groups=precomputed_groups,
                     precomputed_target_order=precomputed_target_order,
@@ -1869,6 +1888,7 @@ def render_strike_rate_section(
                     entry_threshold,
                     hold_until_close_threshold,
                     modes=(normalized_second_entry_mode,),
+                    trade_value_usd=trade_value_usd,
                     progress_callback=_second_entry_progress_callback,
                     precomputed_groups=precomputed_groups,
                     precomputed_target_order=precomputed_target_order,
