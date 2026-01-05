@@ -747,6 +747,16 @@ def _calculate_window_summary(
             )
         exit_price_display = record.get("exit_price_market", record["exit_price"])
 
+        entry_mode = (record.get("entry_mode") or "off").title()
+        second_entry_time = record.get("second_entry_time")
+        second_entry_price = record.get("second_entry_price")
+        if entry_mode == "Off":
+            second_entry_result = "Off"
+        elif second_entry_time is not None and second_entry_price is not None:
+            second_entry_result = "Executed"
+        else:
+            second_entry_result = "No pullback"
+
         summary_rows.append(
             {
                 "TargetTime": market_group["TargetTime"].iloc[0],
@@ -754,6 +764,10 @@ def _calculate_window_summary(
                 "First Crossing Side": record["expected_side"] or "None",
                 "Crossing Time": record["entry_time"],
                 "Entry Price": record["entry_price"],
+                "Second Entry Mode": entry_mode,
+                "Second Entry Result": second_entry_result,
+                "Second Entry Time": second_entry_time,
+                "Second Entry Price": second_entry_price,
                 "Exit Time": record["exit_time"],
                 "Exit Price": exit_price_display,
                 "Exit Reason": record["exit_reason"],
