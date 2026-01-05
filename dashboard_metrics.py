@@ -18,6 +18,8 @@ def build_trade_pnl_records(trade_records, trade_value_usd):
         position_multiplier = record.get("position_multiplier", 1)
         if outcome == "Lose":
             pnl_usd = -trade_value_usd * position_multiplier
+        elif outcome == "Tie":
+            pnl_usd = 0.0
         else:
             pnl_usd = (exit_price - entry_price) * trade_value_usd * position_multiplier
         closed_trades.append(

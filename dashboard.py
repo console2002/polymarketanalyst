@@ -604,9 +604,7 @@ def _summarize_trade_record_metrics(trade_records, trade_value_usd):
         win_rate_needed = np.nan
     edge = win_rate - win_rate_needed if not pd.isna(win_rate) and not pd.isna(win_rate_needed) else np.nan
     pnl_values = [
-        (record["exit_price"] - record["entry_price"])
-        * trade_value_usd
-        * record.get("position_multiplier", 1)
+        _calculate_trade_pnl_usd(record, trade_value_usd)
         for record in closed_records
     ]
     expectancy = (sum(pnl_values) / len(pnl_values)) if pnl_values else np.nan
@@ -630,6 +628,20 @@ def _split_trade_records(trade_records):
         autotune_records = trade_records[:split_point]
         strike_records = trade_records[split_point:]
     return autotune_records, strike_records
+
+
+def _calculate_trade_pnl_usd(record, trade_value_usd):
+    position_multiplier = record.get("position_multiplier", 1)
+    outcome = record.get("outcome")
+    if outcome == "Lose":
+        return -trade_value_usd * position_multiplier
+    if outcome == "Tie":
+        return 0.0
+    return (
+        (record["exit_price"] - record["entry_price"])
+        * trade_value_usd
+        * position_multiplier
+    )
 
 
 def _build_market_groups(df, time_column):
@@ -740,11 +752,7 @@ def _calculate_window_summary(
             and not pd.isna(record["entry_price"])
             and not pd.isna(record["exit_price"])
         ):
-            pnl_usd = (
-                (record["exit_price"] - record["entry_price"])
-                * trade_value_usd
-                * record.get("position_multiplier", 1)
-            )
+            pnl_usd = _calculate_trade_pnl_usd(record, trade_value_usd)
         exit_price_display = record.get("exit_price_market", record["exit_price"])
 
         entry_mode = (record.get("entry_mode") or "off").title()
