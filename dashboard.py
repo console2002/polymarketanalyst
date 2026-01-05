@@ -585,7 +585,7 @@ def _summarize_trade_record_metrics(trade_records, trade_value_usd):
     closed_records = [
         record
         for record in trade_records
-        if record.get("outcome") in {"Win", "Lose", "Tie"}
+        if record.get("outcome") in {"Win", "Lose"}
         and record.get("entry_price") is not None
         and record.get("exit_price") is not None
         and not pd.isna(record.get("entry_price"))
@@ -633,15 +633,13 @@ def _split_trade_records(trade_records):
 def _calculate_trade_pnl_usd(record, trade_value_usd):
     position_multiplier = record.get("position_multiplier", 1)
     outcome = record.get("outcome")
-    if outcome == "Lose":
-        return -trade_value_usd * position_multiplier
-    if outcome == "Tie":
-        return 0.0
-    return (
-        (record["exit_price"] - record["entry_price"])
-        * trade_value_usd
-        * position_multiplier
-    )
+    if outcome == "Win":
+        return (
+            (record["exit_price"] - record["entry_price"])
+            * trade_value_usd
+            * position_multiplier
+        )
+    return -trade_value_usd * position_multiplier
 
 
 def _build_market_groups(df, time_column):
@@ -690,7 +688,7 @@ def _calculate_strike_rate_metrics(
         segment_records = strike_records
 
     total_count = len(segment_records)
-    trade_records = [record for record in segment_records if record["outcome"] in {"Win", "Lose", "Tie"}]
+    trade_records = [record for record in segment_records if record["outcome"] in {"Win", "Lose"}]
     trade_count = len(trade_records)
     wins = sum(1 for record in trade_records if record["outcome"] == "Win")
     strike_rate = (wins / trade_count * 100) if trade_count else np.nan
@@ -1405,15 +1403,13 @@ def render_probability_history(
                 held_times.append(record["exit_time"])
                 held_prices.append(exit_price_display)
 
-        if record["outcome"] in {"Win", "Lose", "Tie"}:
+        if record["outcome"] in {"Win", "Lose"}:
             if record["exit_reason"] == "threshold":
                 outcome_text = f"{record['outcome']} (exit)"
             else:
                 outcome_text = f"{record['outcome']} (close)"
 
-            outcome_color = "#808080" if record["outcome"] == "Tie" else (
-                "#00AA00" if record["outcome"] == "Win" else "#FF0000"
-            )
+            outcome_color = "#00AA00" if record["outcome"] == "Win" else "#FF0000"
             fig.add_annotation(
                 x=record["exit_time"] or record["market_close_time"],
                 y=1.03,
