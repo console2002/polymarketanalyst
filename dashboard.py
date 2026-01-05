@@ -669,6 +669,7 @@ def _calculate_strike_rate_metrics(
     history_segment="strike",
     precomputed_groups=None,
     precomputed_target_order=None,
+    return_dict=False,
 ):
     trade_records = _calculate_trade_records(
         df,
@@ -719,6 +720,17 @@ def _calculate_strike_rate_metrics(
         min_entry_price = np.nan
         max_entry_price = np.nan
         win_rate_needed = np.nan
+    expectancy = (sum(pnl_values) / len(pnl_values)) if pnl_values else np.nan
+    if return_dict:
+        return {
+            "strike_rate": strike_rate,
+            "avg_entry_price": avg_entry_price,
+            "min_entry_price": min_entry_price,
+            "max_entry_price": max_entry_price,
+            "win_rate_needed": win_rate_needed,
+            "total_count": total_count,
+            "expectancy": expectancy,
+        }
     return strike_rate, avg_entry_price, min_entry_price, max_entry_price, win_rate_needed, total_count
 
 
@@ -1790,6 +1802,18 @@ def render_strike_rate_section(
         st.caption(
             f"Samples: autotune={autotune_sample_size}, strike rate={strike_sample_size}"
         )
+    autotune_objective_label = st.radio(
+        "Autotune objective",
+        options=("Max edge", "Max expected P/L"),
+        index=0,
+        key="autotune_objective",
+        horizontal=True,
+    )
+    objective_map = {
+        "Max edge": "edge",
+        "Max expected P/L": "expectancy",
+    }
+    autotune_objective = objective_map.get(autotune_objective_label, "edge")
     metrics_container = st.container()
     with metrics_container:
         metrics_table = pd.DataFrame(
@@ -1831,6 +1855,7 @@ def render_strike_rate_section(
                     history_segment="autotune",
                     precomputed_groups=precomputed_groups,
                     precomputed_target_order=precomputed_target_order,
+                    return_dict=True,
                 )
 
             best_result = run_autotune(
@@ -1838,6 +1863,7 @@ def render_strike_rate_section(
                 history_time_column,
                 _autotune_metrics,
                 progress_callback=_progress_callback,
+                objective=autotune_objective,
             )
         progress_container.empty()
         status_container.update(state="complete", label="Autotune complete")
