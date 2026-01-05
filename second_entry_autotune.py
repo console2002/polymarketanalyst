@@ -88,6 +88,7 @@ def _calculate_strike_rate_metrics(
     avg_win = (sum(win_pnl_values) / len(win_pnl_values)) if win_pnl_values else np.nan
     avg_loss = (sum(loss_pnl_values) / len(loss_pnl_values)) if loss_pnl_values else np.nan
     expectancy = (sum(pnl_values) / len(pnl_values)) if pnl_values else np.nan
+    expected_pnl = expectancy
     if not pd.isna(avg_win) and not pd.isna(avg_loss) and avg_win > 0 and avg_loss > 0:
         win_rate_needed = avg_loss / (avg_win + avg_loss) * 100
     else:
@@ -98,10 +99,11 @@ def _calculate_strike_rate_metrics(
         "win_rate_needed": win_rate_needed,
         "total_count": total_count,
         "expectancy": expectancy,
+        "expected_pnl": expected_pnl,
     }
 
 
-def _summarize_trade_records(trade_records):
+def _summarize_trade_records(trade_records, trade_value_usd=1.0):
     closed_records = [
         record
         for record in trade_records
@@ -118,11 +120,17 @@ def _summarize_trade_records(trade_records):
         record["exit_price"] - record["entry_price"]
         for record in closed_records
     ]
+    pnl_usd_values = [
+        _calculate_trade_pnl_usd(record, trade_value_usd)
+        for record in closed_records
+    ]
     expectancy = (sum(pnl_values) / len(pnl_values)) if pnl_values else np.nan
+    expected_pnl = (sum(pnl_usd_values) / len(pnl_usd_values)) if pnl_usd_values else np.nan
     return {
         "trade_count": trade_count,
         "win_rate": win_rate,
         "expectancy": expectancy,
+        "expected_pnl": expected_pnl,
     }
 
 
@@ -185,13 +193,18 @@ def run_second_entry_autotune(
             win_rate_needed = metrics["win_rate_needed"]
             total_count = metrics["total_count"]
             expectancy = metrics["expectancy"]
+            expected_pnl = metrics["expected_pnl"]
             if (
                 total_count in {0, None}
                 or pd.isna(total_count)
             ):
                 continue
             objective_key = str(objective).strip().lower() if objective else "edge"
-            if objective_key in {"expectancy", "expected_pnl"}:
+            if objective_key == "expected_pnl":
+                if pd.isna(expected_pnl):
+                    continue
+                score = expected_pnl
+            elif objective_key == "expectancy":
                 if pd.isna(expectancy):
                     continue
                 score = expectancy
@@ -212,6 +225,7 @@ def run_second_entry_autotune(
                     "edge": strike_rate - win_rate_needed,
                     "total_count": total_count,
                     "expectancy": expectancy,
+                    "expected_pnl": expected_pnl,
                 }
         if best_result:
             trade_records = calculate_market_trade_records_with_second_entry(
@@ -228,7 +242,7 @@ def run_second_entry_autotune(
                 precomputed_target_order=precomputed_target_order,
             )
             segment_records = _select_history_segment(trade_records, summary_segment)
-            summary = _summarize_trade_records(segment_records)
+            summary = _summarize_trade_records(segment_records, trade_value_usd=trade_value_usd)
             best_result.update(summary)
         results[mode] = best_result
 
