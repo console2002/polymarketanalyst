@@ -7,6 +7,7 @@ def build_trade_pnl_records(trade_records, trade_value_usd):
     for record in trade_records:
         entry_price = record.get("entry_price")
         exit_price = record.get("exit_price")
+        outcome = record.get("outcome")
         if entry_price is None or exit_price is None:
             continue
         if pd.isna(entry_price) or pd.isna(exit_price):
@@ -15,7 +16,10 @@ def build_trade_pnl_records(trade_records, trade_value_usd):
         if exit_timestamp is None or pd.isna(exit_timestamp):
             continue
         position_multiplier = record.get("position_multiplier", 1)
-        pnl_usd = (exit_price - entry_price) * trade_value_usd * position_multiplier
+        if outcome == "Lose":
+            pnl_usd = -trade_value_usd * position_multiplier
+        else:
+            pnl_usd = (exit_price - entry_price) * trade_value_usd * position_multiplier
         closed_trades.append(
             {
                 "exit_time": pd.Timestamp(exit_timestamp),
