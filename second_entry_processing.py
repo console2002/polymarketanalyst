@@ -174,7 +174,7 @@ def calculate_market_trade_records_with_second_entry(
         expected_side = None
         trigger_time = None
         trigger_price = None
-        trigger_threshold = second_threshold if entry_mode == "sole" else probability_threshold
+        trigger_threshold = probability_threshold
         if not eligible.empty:
             up_cross_index = _find_threshold_crossing(eligible["UpPrice"], trigger_threshold)
             down_cross_index = _find_threshold_crossing(eligible["DownPrice"], trigger_threshold)
@@ -211,10 +211,6 @@ def calculate_market_trade_records_with_second_entry(
                 entry_time = trigger_time
                 entry_price = trigger_price
                 trade_executed = True
-            elif entry_mode == "sole":
-                entry_time = trigger_time
-                entry_price = trigger_price
-                trade_executed = entry_time is not None and entry_price is not None
             else:
                 eligible_after_trigger = eligible[eligible[time_column] >= trigger_time]
                 if not second_entry_taken:
@@ -225,7 +221,12 @@ def calculate_market_trade_records_with_second_entry(
                         if second_entry_price is not None and not pd.isna(second_entry_price):
                             second_entry_taken = True
 
-                if entry_mode == "additive":
+                if entry_mode == "sole":
+                    if second_entry_taken:
+                        entry_time = second_entry_time
+                        entry_price = second_entry_price
+                    trade_executed = entry_time is not None and entry_price is not None
+                elif entry_mode == "additive":
                     entry_time = trigger_time
                     if second_entry_taken:
                         if trigger_price is not None and second_entry_price is not None:
