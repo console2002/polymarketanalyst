@@ -10,9 +10,10 @@ def run_autotune(
     entry_threshold_range=np.arange(0.60, 0.801, 0.02),
     hold_until_close_threshold_range=np.arange(0.60, 0.801, 0.02),
     progress_callback=None,
+    objective="edge",
 ):
     best_result = None
-    best_edge = None
+    best_score = None
     minutes_values = list(minutes_range)
     entry_values = list(entry_threshold_range)
     hold_values = list(hold_until_close_threshold_range)
@@ -51,6 +52,7 @@ def run_autotune(
                         "total_count",
                         metrics.get("sample_size", metrics.get("count")),
                     )
+                    expectancy = metrics.get("expectancy")
                 else:
                     metrics_values = list(metrics)
                     if len(metrics_values) < 3:
@@ -58,6 +60,7 @@ def run_autotune(
                     strike = metrics_values[0]
                     win_rate = metrics_values[-2]
                     total_count = metrics_values[-1]
+                    expectancy = None
                 if (
                     total_count in {0, None}
                     or pd.isna(total_count)
@@ -66,8 +69,14 @@ def run_autotune(
                 ):
                     continue
                 edge = strike - win_rate
-                if best_edge is None or edge > best_edge:
-                    best_edge = edge
+                if objective == "expectancy":
+                    score = expectancy
+                else:
+                    score = edge
+                if score is None or pd.isna(score):
+                    continue
+                if best_score is None or score > best_score:
+                    best_score = score
                     best_result = {
                         "minutes_after_open": minutes_value,
                         "entry_threshold": round(float(entry_value), 2),
@@ -75,6 +84,7 @@ def run_autotune(
                         "strike_rate": strike,
                         "win_rate_needed": win_rate,
                         "edge": edge,
+                        "expectancy": expectancy,
                     }
 
     return best_result
