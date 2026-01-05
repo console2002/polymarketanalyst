@@ -12,7 +12,8 @@ from dashboard_processing import (
 )
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache", "second_entry")
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
+HOLD_EXIT_THRESHOLD = 0.99
 
 
 def _find_pullback_crossing(series, threshold):
@@ -243,12 +244,19 @@ def calculate_market_trade_records_with_second_entry(
             and not pd.isna(entry_price)
         )
         if entry_valid and entry_price > 0:
+            side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
+            eligible_after_entry = eligible[eligible[time_column] >= entry_time]
             if entry_price >= hold_threshold:
-                exit_time = market_close_time
-                exit_reason = "held_to_close"
+                exit_cross_index = _find_threshold_crossing(eligible_after_entry[side_column], HOLD_EXIT_THRESHOLD)
+                if exit_cross_index is not None:
+                    exit_time = eligible_after_entry.loc[exit_cross_index, time_column]
+                    exit_price = eligible_after_entry.loc[exit_cross_index, side_column]
+                    exit_price_market = exit_price
+                    exit_reason = "threshold"
+                else:
+                    exit_time = market_close_time
+                    exit_reason = "held_to_close"
             else:
-                side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
-                eligible_after_entry = eligible[eligible[time_column] >= entry_time]
                 exit_cross_index = _find_threshold_crossing(eligible_after_entry[side_column], hold_threshold)
                 if exit_cross_index is not None:
                     exit_time = eligible_after_entry.loc[exit_cross_index, time_column]

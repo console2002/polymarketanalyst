@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+HOLD_EXIT_THRESHOLD = 0.99
+
 
 def align_market_open(timestamp):
     if timestamp is None or pd.isna(timestamp):
@@ -129,12 +131,19 @@ def calculate_market_trade_records(
         exit_price_market = None
         exit_reason = None
         if expected_side and entry_price is not None and not pd.isna(entry_price):
+            side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
+            eligible_after_entry = eligible[eligible[time_column] >= entry_time]
             if entry_price >= hold_threshold:
-                exit_time = market_close_time
-                exit_reason = "held_to_close"
+                exit_cross_index = _find_threshold_crossing(eligible_after_entry[side_column], HOLD_EXIT_THRESHOLD)
+                if exit_cross_index is not None:
+                    exit_time = eligible_after_entry.loc[exit_cross_index, time_column]
+                    exit_price = eligible_after_entry.loc[exit_cross_index, side_column]
+                    exit_price_market = exit_price
+                    exit_reason = "threshold"
+                else:
+                    exit_time = market_close_time
+                    exit_reason = "held_to_close"
             else:
-                side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
-                eligible_after_entry = eligible[eligible[time_column] >= entry_time]
                 exit_cross_index = _find_threshold_crossing(eligible_after_entry[side_column], hold_threshold)
                 if exit_cross_index is not None:
                     exit_time = eligible_after_entry.loc[exit_cross_index, time_column]
