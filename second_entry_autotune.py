@@ -28,6 +28,18 @@ def _select_history_segment(trade_records, history_segment):
     return strike_records
 
 
+def _calculate_trade_pnl_usd(record, trade_value_usd):
+    position_multiplier = record.get("position_multiplier", 1)
+    outcome = record.get("outcome")
+    if outcome == "Win":
+        return (
+            (record["exit_price"] - record["entry_price"])
+            * trade_value_usd
+            * position_multiplier
+        )
+    return -trade_value_usd * position_multiplier
+
+
 def _calculate_strike_rate_metrics(
     df,
     time_column,
@@ -36,6 +48,7 @@ def _calculate_strike_rate_metrics(
     hold_until_close_threshold,
     second_entry_threshold,
     second_entry_mode,
+    trade_value_usd=1.0,
     history_segment="autotune",
     time_format=TIME_FORMAT,
     precomputed_groups=None,
@@ -62,12 +75,20 @@ def _calculate_strike_rate_metrics(
     trade_count = len(trade_records)
     wins = sum(1 for record in trade_records if record["outcome"] == "Win")
     strike_rate = (wins / trade_count * 100) if trade_count else np.nan
-    entry_prices = [record["entry_price"] for record in trade_records if record["entry_price"] is not None]
-    if entry_prices:
-        avg_entry_price = sum(entry_prices) / len(entry_prices)
-        gain = 1 - avg_entry_price
-        loss = 1.0
-        win_rate_needed = loss / (gain + loss) * 100
+    pnl_values = [
+        _calculate_trade_pnl_usd(record, trade_value_usd)
+        for record in trade_records
+        if record.get("entry_price") is not None
+        and record.get("exit_price") is not None
+        and not pd.isna(record.get("entry_price"))
+        and not pd.isna(record.get("exit_price"))
+    ]
+    win_pnl_values = [pnl for pnl in pnl_values if pnl > 0]
+    loss_pnl_values = [abs(pnl) for pnl in pnl_values if pnl <= 0]
+    avg_win = (sum(win_pnl_values) / len(win_pnl_values)) if win_pnl_values else np.nan
+    avg_loss = (sum(loss_pnl_values) / len(loss_pnl_values)) if loss_pnl_values else np.nan
+    if not pd.isna(avg_win) and not pd.isna(avg_loss) and avg_win > 0 and avg_loss > 0:
+        win_rate_needed = avg_loss / (avg_win + avg_loss) * 100
     else:
         win_rate_needed = np.nan
 
@@ -113,6 +134,7 @@ def run_second_entry_autotune(
     modes=("additive", "sole"),
     time_format=TIME_FORMAT,
     summary_segment="strike",
+    trade_value_usd=1.0,
     progress_callback=None,
     precomputed_groups=None,
     precomputed_target_order=None,
@@ -151,6 +173,7 @@ def run_second_entry_autotune(
                 hold_until_close_threshold,
                 round(float(second_entry_value), 3),
                 mode,
+                trade_value_usd=trade_value_usd,
                 time_format=time_format,
                 precomputed_groups=precomputed_groups,
                 precomputed_target_order=precomputed_target_order,
