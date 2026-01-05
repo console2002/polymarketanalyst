@@ -191,7 +191,7 @@ def run_second_entry_autotune(
             ):
                 continue
             objective_key = str(objective).strip().lower() if objective else "edge"
-            if objective_key == "expectancy":
+            if objective_key in {"expectancy", "expected_pnl"}:
                 if pd.isna(expectancy):
                     continue
                 score = expectancy
