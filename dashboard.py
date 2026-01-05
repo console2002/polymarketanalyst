@@ -721,6 +721,7 @@ def _calculate_strike_rate_metrics(
         max_entry_price = np.nan
         win_rate_needed = np.nan
     expectancy = (sum(pnl_values) / len(pnl_values)) if pnl_values else np.nan
+    expected_pnl = sum(pnl_values) if pnl_values else np.nan
     if return_dict:
         return {
             "strike_rate": strike_rate,
@@ -730,6 +731,7 @@ def _calculate_strike_rate_metrics(
             "win_rate_needed": win_rate_needed,
             "total_count": total_count,
             "expectancy": expectancy,
+            "expected_pnl": expected_pnl,
         }
     return strike_rate, avg_entry_price, min_entry_price, max_entry_price, win_rate_needed, total_count
 
