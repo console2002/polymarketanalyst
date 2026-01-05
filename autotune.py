@@ -53,6 +53,14 @@ def run_autotune(
                         metrics.get("sample_size", metrics.get("count")),
                     )
                     expectancy = metrics.get("expectancy")
+                    expected_pnl = metrics.get("expected_pnl")
+                    if (
+                        expected_pnl is None
+                        and expectancy is not None
+                        and total_count not in {0, None}
+                        and not pd.isna(total_count)
+                    ):
+                        expected_pnl = expectancy * total_count
                 else:
                     metrics_values = list(metrics)
                     if len(metrics_values) < 3:
@@ -61,6 +69,7 @@ def run_autotune(
                     win_rate = metrics_values[-2]
                     total_count = metrics_values[-1]
                     expectancy = None
+                    expected_pnl = None
                 if (
                     total_count in {0, None}
                     or pd.isna(total_count)
@@ -69,8 +78,8 @@ def run_autotune(
                 ):
                     continue
                 edge = strike - win_rate
-                if objective == "expectancy":
-                    score = expectancy
+                if objective == "expected_pnl":
+                    score = expected_pnl
                 else:
                     score = edge
                 if score is None or pd.isna(score):
