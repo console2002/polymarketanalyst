@@ -1816,6 +1816,17 @@ def render_strike_rate_section(
         "Max expected P/L": "expectancy",
     }
     autotune_objective = objective_map.get(autotune_objective_label, "edge")
+    second_entry_autotune_objective_label = st.radio(
+        "Second-entry autotune objective",
+        options=("Max edge", "Max expected P/L"),
+        index=0,
+        key="second_entry_autotune_objective",
+        horizontal=True,
+    )
+    second_entry_autotune_objective = objective_map.get(
+        second_entry_autotune_objective_label,
+        "edge",
+    )
     metrics_container = st.container()
     with metrics_container:
         metrics_table = pd.DataFrame(
@@ -1918,6 +1929,7 @@ def render_strike_rate_section(
                     modes=(normalized_second_entry_mode,),
                     trade_value_usd=trade_value_usd,
                     progress_callback=_second_entry_progress_callback,
+                    objective=second_entry_autotune_objective,
                     precomputed_groups=precomputed_groups,
                     precomputed_target_order=precomputed_target_order,
                 )
