@@ -1339,6 +1339,8 @@ def render_probability_history(
     trade_record_map = {record["target_time_dt"]: record for record in trade_records}
     entry_times = []
     entry_prices = []
+    second_entry_times = []
+    second_entry_prices = []
     exit_times = []
     exit_prices = []
     held_times = []
@@ -1362,8 +1364,15 @@ def render_probability_history(
             )
 
         if record["entry_time"] is not None and record["entry_price"] is not None:
-            entry_times.append(record["entry_time"])
-            entry_prices.append(record["entry_price"])
+            if record.get("entry_mode") == "additive" and record.get("trigger_price") is not None:
+                entry_times.append(record["entry_time"])
+                entry_prices.append(record["trigger_price"])
+                if record.get("second_entry_time") is not None and record.get("second_entry_price") is not None:
+                    second_entry_times.append(record["second_entry_time"])
+                    second_entry_prices.append(record["second_entry_price"])
+            else:
+                entry_times.append(record["entry_time"])
+                entry_prices.append(record["entry_price"])
 
         exit_price_display = record.get("exit_price_market", record["exit_price"])
         if record["exit_time"] is not None and exit_price_display is not None and not pd.isna(exit_price_display):
@@ -1420,6 +1429,22 @@ def render_probability_history(
                 textposition="top center",
                 textfont=dict(size=10, color="#6A5ACD"),
                 name="Exit",
+                showlegend=False,
+            ),
+            row=1,
+            col=1,
+        )
+    if second_entry_times:
+        fig.add_trace(
+            go.Scatter(
+                x=second_entry_times,
+                y=second_entry_prices,
+                mode="markers+text",
+                marker=dict(color="#FFA500", size=8),
+                text=["2nd entry"] * len(second_entry_times),
+                textposition="top center",
+                textfont=dict(size=10, color="#FFA500"),
+                name="Second Entry",
                 showlegend=False,
             ),
             row=1,
