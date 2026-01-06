@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
 import re
+import uuid
 from autotune import run_autotune, run_coarse_autotune
 from second_entry_autotune import run_second_entry_autotune
 from dashboard_metrics import (
@@ -27,6 +28,7 @@ DATE_FORMAT = "%d%m%Y"
 CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache", "second_entry")
 CACHE_SCHEMA_VERSION = 2
 COARSE_AUTOTUNE_COLUMNS = [
+    "run_id",
     "minutes_after_open",
     "entry_threshold",
     "hold_until_close_threshold",
@@ -520,6 +522,7 @@ def _prepare_coarse_results_df(results):
     for column in numeric_columns:
         df[column] = pd.to_numeric(df[column], errors="coerce")
     df["second_entry_mode"] = df["second_entry_mode"].astype(str)
+    df["run_id"] = df["run_id"].astype(str)
     return df
 
 
@@ -1974,6 +1977,18 @@ def render_strike_rate_section(
             help="Relative paths are saved under the dashboard directory.",
             disabled=not save_results_enabled,
         )
+        resolved_save_path_preview = (
+            _resolve_results_path(st.session_state.coarse_autotune_save_path)
+            if save_results_enabled
+            else None
+        )
+        incremental_status = (
+            "enabled" if save_results_enabled and resolved_save_path_preview else "disabled"
+        )
+        st.caption(f"Incremental CSV writes: {incremental_status}")
+        st.caption(
+            f"CSV path: {resolved_save_path_preview or 'Not set'}"
+        )
         load_results_enabled = st.checkbox(
             "Load saved results",
             key="coarse_autotune_load_enabled",
@@ -2113,6 +2128,19 @@ def render_strike_rate_section(
                         return_dict=True,
                     )
 
+                run_id = f"coarse_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+                save_path_value = st.session_state.coarse_autotune_save_path
+                if save_results_enabled and not save_path_value:
+                    save_path_value = _default_coarse_autotune_filename()
+                    st.session_state.coarse_autotune_save_path = save_path_value
+                resolved_save_path = (
+                    _resolve_results_path(save_path_value) if save_results_enabled else None
+                )
+                incremental_active = bool(save_results_enabled and resolved_save_path)
+                if incremental_active:
+                    status_container.caption(
+                        f"Incremental CSV writes enabled: {resolved_save_path}"
+                    )
                 coarse_results = run_coarse_autotune(
                     history_df,
                     history_time_column,
@@ -2139,6 +2167,9 @@ def render_strike_rate_section(
                     ),
                     modes=[_normalize_second_entry_mode(mode) for mode in coarse_second_entry_modes],
                     progress_callback=_coarse_progress_callback,
+                    save_path=resolved_save_path,
+                    run_id=run_id,
+                    incremental_save=incremental_active,
                 )
 
                 results_df = _prepare_coarse_results_df(coarse_results)
@@ -2146,7 +2177,11 @@ def render_strike_rate_section(
                 best_result = _select_best_coarse_result(results_df, coarse_autotune_objective)
             progress_container.empty()
             status_container.update(state="complete", label="Coarse autotune complete")
-            if save_results_enabled and st.session_state.coarse_autotune_results_df is not None:
+            if (
+                save_results_enabled
+                and st.session_state.coarse_autotune_results_df is not None
+                and not incremental_active
+            ):
                 save_path_value = st.session_state.coarse_autotune_save_path
                 if not save_path_value:
                     save_path_value = _default_coarse_autotune_filename()

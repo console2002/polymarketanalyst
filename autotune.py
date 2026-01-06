@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -109,6 +111,9 @@ def run_coarse_autotune(
     second_entry_threshold_range=np.arange(0.40, 0.801, 0.05),
     modes=("additive", "sole"),
     progress_callback=None,
+    save_path=None,
+    run_id=None,
+    incremental_save=False,
 ):
     results = []
     minutes_values = list(minutes_range)
@@ -187,20 +192,31 @@ def run_coarse_autotune(
                             and not pd.isna(win_rate)
                             else np.nan
                         )
-                        results.append(
-                            {
-                                "minutes_after_open": minutes_value,
-                                "entry_threshold": round(float(entry_value), 2),
-                                "hold_until_close_threshold": round(float(hold_value), 2),
-                                "second_entry_threshold": round(float(second_entry_value), 2),
-                                "second_entry_mode": mode,
-                                "strike_rate": strike,
-                                "win_rate_needed": win_rate,
-                                "edge": edge,
-                                "expectancy": expectancy,
-                                "expected_pnl": expected_pnl,
-                                "total_count": total_count,
-                            }
-                        )
+                        row = {
+                            "run_id": run_id,
+                            "minutes_after_open": minutes_value,
+                            "entry_threshold": round(float(entry_value), 2),
+                            "hold_until_close_threshold": round(float(hold_value), 2),
+                            "second_entry_threshold": round(float(second_entry_value), 2),
+                            "second_entry_mode": mode,
+                            "strike_rate": strike,
+                            "win_rate_needed": win_rate,
+                            "edge": edge,
+                            "expectancy": expectancy,
+                            "expected_pnl": expected_pnl,
+                            "total_count": total_count,
+                        }
+                        results.append(row)
+                        if incremental_save and save_path:
+                            header_needed = not os.path.exists(save_path) or os.path.getsize(save_path) == 0
+                            with open(save_path, "a", newline="") as handle:
+                                pd.DataFrame([row]).to_csv(
+                                    handle,
+                                    mode="a",
+                                    header=header_needed,
+                                    index=False,
+                                )
+                                handle.flush()
+                                os.fsync(handle.fileno())
 
     return results
