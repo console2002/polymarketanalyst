@@ -868,6 +868,10 @@ def _initialize_strike_rate_state(
         st.session_state.autotune_result = None
     if "autotune_message" not in st.session_state:
         st.session_state.autotune_message = None
+    if "coarse_autotune_result" not in st.session_state:
+        st.session_state.coarse_autotune_result = None
+    if "coarse_autotune_message" not in st.session_state:
+        st.session_state.coarse_autotune_message = None
     if "second_entry_autotune_result" not in st.session_state:
         st.session_state.second_entry_autotune_result = None
     if "second_entry_autotune_message" not in st.session_state:
@@ -1827,6 +1831,63 @@ def render_strike_rate_section(
         second_entry_autotune_objective_label,
         "edge",
     )
+    coarse_autotune_objective_label = st.radio(
+        "Coarse autotune objective",
+        options=("Max edge", "Max expected P/L"),
+        index=0,
+        key="coarse_autotune_objective",
+        horizontal=True,
+    )
+    coarse_objective_map = {
+        "Max edge": "edge",
+        "Max expected P/L": "expected_pnl",
+    }
+    coarse_autotune_objective = coarse_objective_map.get(
+        coarse_autotune_objective_label,
+        "edge",
+    )
+    with st.expander("Coarse autotune settings", expanded=False):
+        coarse_minutes_range = st.slider(
+            "Minutes after open range",
+            min_value=5,
+            max_value=12,
+            value=(5, 12),
+            step=2,
+            key="coarse_minutes_after_open_range",
+        )
+        coarse_entry_range = st.slider(
+            "Entry threshold range",
+            min_value=0.60,
+            max_value=0.80,
+            value=(0.60, 0.80),
+            step=0.05,
+            format="%.2f",
+            key="coarse_entry_threshold_range",
+        )
+        coarse_hold_range = st.slider(
+            "Hold until close threshold range",
+            min_value=0.65,
+            max_value=0.85,
+            value=(0.65, 0.85),
+            step=0.05,
+            format="%.2f",
+            key="coarse_hold_threshold_range",
+        )
+        coarse_second_entry_threshold_range = st.slider(
+            "Second entry threshold range",
+            min_value=0.40,
+            max_value=0.80,
+            value=(0.40, 0.80),
+            step=0.05,
+            format="%.2f",
+            key="coarse_second_entry_threshold_range",
+        )
+        coarse_second_entry_modes = st.multiselect(
+            "Second entry modes",
+            options=("additive", "sole"),
+            default=("additive", "sole"),
+            key="coarse_second_entry_modes",
+        )
     metrics_container = st.container()
     with metrics_container:
         metrics_table = pd.DataFrame(
@@ -1840,11 +1901,19 @@ def render_strike_rate_section(
             }
         )
         st.table(metrics_table)
-    autotune_clicked = st.button(
-        "Autotune",
-        key="autotune_button",
-        use_container_width=True,
-    )
+    autotune_col, coarse_autotune_col = st.columns(2)
+    with autotune_col:
+        autotune_clicked = st.button(
+            "Autotune",
+            key="autotune_button",
+            use_container_width=True,
+        )
+    with coarse_autotune_col:
+        coarse_autotune_clicked = st.button(
+            "Coarse Autotune",
+            key="coarse_autotune_button",
+            use_container_width=True,
+        )
     if autotune_clicked:
         progress_container = st.empty()
         status_container = st.status("Autotuning…", expanded=True)
@@ -1886,6 +1955,145 @@ def render_strike_rate_section(
         else:
             st.session_state.autotune_result = None
             st.session_state.autotune_message = "No viable data for autotune"
+    if coarse_autotune_clicked:
+        if not coarse_second_entry_modes:
+            st.session_state.coarse_autotune_result = None
+            st.session_state.coarse_autotune_message = "Select at least one second-entry mode"
+        else:
+            progress_container = st.empty()
+            status_container = st.status("Coarse autotuning…", expanded=True)
+            progress_bar = progress_container.progress(0)
+
+            minutes_values = list(
+                range(coarse_minutes_range[0], coarse_minutes_range[1] + 1, 2)
+            )
+            entry_values = [
+                round(float(value), 2)
+                for value in np.arange(
+                    coarse_entry_range[0],
+                    coarse_entry_range[1] + 0.001,
+                    0.05,
+                )
+            ]
+            hold_values = [
+                round(float(value), 2)
+                for value in np.arange(
+                    coarse_hold_range[0],
+                    coarse_hold_range[1] + 0.001,
+                    0.05,
+                )
+            ]
+            second_entry_values = [
+                round(float(value), 2)
+                for value in np.arange(
+                    coarse_second_entry_threshold_range[0],
+                    coarse_second_entry_threshold_range[1] + 0.001,
+                    0.05,
+                )
+            ]
+            mode_values = [_normalize_second_entry_mode(mode) for mode in coarse_second_entry_modes]
+            total_steps = (
+                len(minutes_values)
+                * len(entry_values)
+                * len(hold_values)
+                * len(second_entry_values)
+                * len(mode_values)
+            )
+            completed_steps = 0
+            best_result = None
+            best_score = None
+
+            def _progress_update(message):
+                if total_steps:
+                    progress_bar.progress(completed_steps / total_steps)
+                status_container.write(message)
+
+            with status_container:
+                for minutes_value in minutes_values:
+                    for entry_value in entry_values:
+                        for hold_value in hold_values:
+                            if hold_value < entry_value:
+                                completed_steps += len(second_entry_values) * len(mode_values)
+                                _progress_update(
+                                    (
+                                        "Skipping "
+                                        f"minutes_after_open={minutes_value}, "
+                                        f"entry_threshold={entry_value:.2f}, "
+                                        f"hold_until_close_threshold={hold_value:.2f}"
+                                    )
+                                )
+                                continue
+                            for second_entry_value in second_entry_values:
+                                for mode in mode_values:
+                                    completed_steps += 1
+                                    _progress_update(
+                                        (
+                                            "Evaluating "
+                                            f"minutes_after_open={minutes_value}, "
+                                            f"entry_threshold={entry_value:.2f}, "
+                                            f"hold_until_close_threshold={hold_value:.2f}, "
+                                            f"second_entry_threshold={second_entry_value:.2f}, "
+                                            f"mode={mode}"
+                                        )
+                                    )
+                                    metrics = _calculate_strike_rate_metrics(
+                                        history_df,
+                                        history_time_column,
+                                        minutes_value,
+                                        entry_value,
+                                        hold_value,
+                                        mode,
+                                        second_entry_value,
+                                        trade_value_usd,
+                                        history_segment="autotune",
+                                        precomputed_groups=precomputed_groups,
+                                        precomputed_target_order=precomputed_target_order,
+                                        return_dict=True,
+                                    )
+                                    strike_rate = metrics.get("strike_rate")
+                                    win_rate_needed = metrics.get("win_rate_needed")
+                                    total_count = metrics.get("total_count")
+                                    expected_pnl = metrics.get("expected_pnl")
+                                    expectancy = metrics.get("expectancy")
+                                    if (
+                                        total_count in {0, None}
+                                        or pd.isna(total_count)
+                                    ):
+                                        continue
+                                    edge = (
+                                        strike_rate - win_rate_needed
+                                        if not pd.isna(strike_rate) and not pd.isna(win_rate_needed)
+                                        else np.nan
+                                    )
+                                    if coarse_autotune_objective == "expected_pnl":
+                                        score = expected_pnl
+                                    else:
+                                        score = edge
+                                    if score is None or pd.isna(score):
+                                        continue
+                                    if best_score is None or score > best_score:
+                                        best_score = score
+                                        best_result = {
+                                            "minutes_after_open": minutes_value,
+                                            "entry_threshold": entry_value,
+                                            "hold_until_close_threshold": hold_value,
+                                            "second_entry_threshold": second_entry_value,
+                                            "second_entry_mode": mode,
+                                            "strike_rate": strike_rate,
+                                            "win_rate_needed": win_rate_needed,
+                                            "edge": edge,
+                                            "expectancy": expectancy,
+                                            "expected_pnl": expected_pnl,
+                                            "total_count": total_count,
+                                        }
+            progress_container.empty()
+            status_container.update(state="complete", label="Coarse autotune complete")
+            if best_result:
+                st.session_state.coarse_autotune_result = best_result
+                st.session_state.coarse_autotune_message = None
+            else:
+                st.session_state.coarse_autotune_result = None
+                st.session_state.coarse_autotune_message = "No viable data for coarse autotune"
     if st.session_state.autotune_result:
         result = st.session_state.autotune_result
         st.caption(
@@ -1899,6 +2107,27 @@ def render_strike_rate_section(
         )
     elif st.session_state.autotune_message:
         st.caption(st.session_state.autotune_message)
+    if st.session_state.coarse_autotune_result:
+        result = st.session_state.coarse_autotune_result
+        expected_pnl_display = (
+            f"{result['expected_pnl']:.2f}"
+            if result.get("expected_pnl") is not None and not pd.isna(result.get("expected_pnl"))
+            else "N/A"
+        )
+        st.caption(
+            "Coarse best: "
+            f"minutes_after_open={result['minutes_after_open']}, "
+            f"entry_threshold={result['entry_threshold']:.2f}, "
+            f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
+            f"second_entry_threshold={result['second_entry_threshold']:.2f}, "
+            f"second_entry_mode={result['second_entry_mode']}, "
+            f"strike_rate={result['strike_rate']:.2f}%, "
+            f"win_rate_needed={result['win_rate_needed']:.2f}%, "
+            f"edge={result['edge']:.2f}%, "
+            f"expected_pnl={expected_pnl_display}"
+        )
+    elif st.session_state.coarse_autotune_message:
+        st.caption(st.session_state.coarse_autotune_message)
     second_entry_autotune_clicked = st.button(
         "Run Second-Entry Autotune",
         key="second_entry_autotune_button",
