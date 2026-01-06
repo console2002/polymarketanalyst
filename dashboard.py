@@ -4,6 +4,7 @@ import numpy as np
 import os
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
@@ -2254,6 +2255,90 @@ def render_strike_rate_section(
         st.table(panel_df)
     elif st.session_state.second_entry_autotune_message:
         st.caption(st.session_state.second_entry_autotune_message)
+    render_coarse_results_explorer(
+        st.session_state.get("coarse_autotune_results_df"),
+        coarse_autotune_objective,
+    )
+
+
+def render_coarse_results_explorer(results_df, objective):
+    if results_df is None or results_df.empty:
+        return
+    st.subheader("Coarse autotune results explorer")
+    objective_column = "expected_pnl" if objective == "expected_pnl" else "edge"
+    minutes_values = sorted(
+        {
+            int(value)
+            for value in results_df["minutes_after_open"].dropna().unique().tolist()
+        }
+    )
+    mode_values = sorted(
+        {str(value) for value in results_df["second_entry_mode"].dropna().unique().tolist()}
+    )
+    minutes_selection = st.multiselect(
+        "Filter minutes after open",
+        options=minutes_values,
+        default=minutes_values,
+        key="coarse_results_minutes_filter",
+    )
+    mode_selection = st.multiselect(
+        "Filter second entry modes",
+        options=mode_values,
+        default=mode_values,
+        key="coarse_results_mode_filter",
+    )
+    filtered_df = results_df.copy()
+    if minutes_selection:
+        filtered_df = filtered_df[filtered_df["minutes_after_open"].isin(minutes_selection)]
+    if mode_selection:
+        filtered_df = filtered_df[filtered_df["second_entry_mode"].isin(mode_selection)]
+    filtered_df = filtered_df.dropna(
+        subset=[
+            "entry_threshold",
+            "hold_until_close_threshold",
+            objective_column,
+        ]
+    )
+    if filtered_df.empty:
+        st.info("No coarse autotune results match the selected filters.")
+        return
+
+    facet_col = "minutes_after_open" if len(minutes_selection) > 1 else None
+    facet_row = "second_entry_mode" if len(mode_selection) > 1 else None
+    hover_columns = [
+        "minutes_after_open",
+        "second_entry_mode",
+        "second_entry_threshold",
+        "strike_rate",
+        "win_rate_needed",
+        "edge",
+        "expectancy",
+        "expected_pnl",
+        "total_count",
+    ]
+    fig = px.scatter(
+        filtered_df,
+        x="entry_threshold",
+        y="hold_until_close_threshold",
+        color=objective_column,
+        facet_col=facet_col,
+        facet_row=facet_row,
+        hover_data=hover_columns,
+        color_continuous_scale="Viridis",
+    )
+    fig.update_layout(
+        height=450 + 200 * max(0, len(mode_selection) - 1),
+        xaxis_title="Entry threshold",
+        yaxis_title="Hold until close threshold",
+        coloraxis_colorbar=dict(title=objective_column.replace("_", " ").title()),
+    )
+    st.plotly_chart(fig, width="stretch")
+    st.markdown("Raw data")
+    display_df = filtered_df.sort_values(
+        by=[objective_column],
+        ascending=False,
+    )
+    st.dataframe(display_df, width="stretch")
 
 
 def render_profit_loss_section(summary_state):
