@@ -75,6 +75,8 @@ def _get_available_data_files():
     for filename in os.listdir(SCRIPT_DIR):
         if not filename.endswith(".csv"):
             continue
+        if filename.startswith("coarse_autotune_"):
+            continue
         file_date = _parse_date_from_filename(filename)
         if file_date:
             files_by_date[file_date] = os.path.join(SCRIPT_DIR, filename)
