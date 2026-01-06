@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import numpy as np
 import os
 import streamlit as st
@@ -234,7 +235,21 @@ def _load_data_file_cached(data_file, modified_time, file_size):
     if "timestamp_et" in df.columns:
         df = _reshape_new_style_csv(df)
     else:
-        df["Timestamp"] = pd.to_datetime(df["Timestamp"], format=TIME_FORMAT, errors="coerce")
+        timestamp_column = None
+        if "Timestamp" in df.columns:
+            timestamp_column = "Timestamp"
+        else:
+            for candidate in ("timestamp", "time", "date", "datetime"):
+                match = next((col for col in df.columns if col.lower() == candidate), None)
+                if match:
+                    timestamp_column = match
+                    break
+        if timestamp_column is None:
+            raise ValueError(
+                f"Missing timestamp columns in {os.path.basename(data_file)} "
+                f"(found: {', '.join(df.columns)})"
+            )
+        df["Timestamp"] = pd.to_datetime(df[timestamp_column], format=TIME_FORMAT, errors="coerce")
         if "Timestamp_UK" in df.columns:
             df["Timestamp_UK"] = pd.to_datetime(df["Timestamp_UK"], format=TIME_FORMAT, errors="coerce")
     for column in ("UpPrice", "DownPrice"):
@@ -273,7 +288,10 @@ def load_data(selected_date, files_by_date, legacy_path):
 def _load_all_data_cached(file_signatures):
     data_frames = []
     for data_file, modified_time, file_size in file_signatures:
-        data_frames.append(_load_data_file_cached(data_file, modified_time, file_size))
+        try:
+            data_frames.append(_load_data_file_cached(data_file, modified_time, file_size))
+        except (KeyError, ValueError) as exc:
+            logging.warning("Skipping data file %s: %s", data_file, exc)
     if not data_frames:
         return None
     return pd.concat(data_frames, ignore_index=True)
