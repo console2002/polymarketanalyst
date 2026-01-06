@@ -25,6 +25,19 @@ TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
 CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache", "second_entry")
 CACHE_SCHEMA_VERSION = 2
+COARSE_AUTOTUNE_COLUMNS = [
+    "minutes_after_open",
+    "entry_threshold",
+    "hold_until_close_threshold",
+    "second_entry_threshold",
+    "second_entry_mode",
+    "strike_rate",
+    "win_rate_needed",
+    "edge",
+    "expectancy",
+    "expected_pnl",
+    "total_count",
+]
 
 
 def add_vline_all_rows(fig, x, **kwargs):
@@ -469,6 +482,57 @@ def _build_second_entry_autotune_panel(results):
         )
     return rows
 
+def _default_coarse_autotune_filename():
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"coarse_autotune_{timestamp}.csv"
+
+
+def _resolve_results_path(path_value):
+    if not path_value:
+        return None
+    if os.path.isabs(path_value):
+        return path_value
+    return os.path.join(SCRIPT_DIR, path_value)
+
+
+def _prepare_coarse_results_df(results):
+    if isinstance(results, pd.DataFrame):
+        df = results.copy()
+    else:
+        df = pd.DataFrame(results)
+    for column in COARSE_AUTOTUNE_COLUMNS:
+        if column not in df.columns:
+            df[column] = np.nan
+    df = df[COARSE_AUTOTUNE_COLUMNS]
+    numeric_columns = [
+        "minutes_after_open",
+        "entry_threshold",
+        "hold_until_close_threshold",
+        "second_entry_threshold",
+        "strike_rate",
+        "win_rate_needed",
+        "edge",
+        "expectancy",
+        "expected_pnl",
+        "total_count",
+    ]
+    for column in numeric_columns:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    df["second_entry_mode"] = df["second_entry_mode"].astype(str)
+    return df
+
+
+def _select_best_coarse_result(results_df, objective):
+    if results_df is None or results_df.empty:
+        return None
+    score_column = "expected_pnl" if objective == "expected_pnl" else "edge"
+    filtered_df = results_df.dropna(subset=[score_column, "total_count"])
+    filtered_df = filtered_df[filtered_df["total_count"].fillna(0) > 0]
+    if filtered_df.empty:
+        return None
+    best_row = filtered_df.loc[filtered_df[score_column].idxmax()]
+    return best_row.to_dict()
+
 def _normalize_second_entry_mode(mode):
     if not mode:
         return "off"
@@ -882,6 +946,16 @@ def _initialize_strike_rate_state(
         st.session_state.strike_sample_size = None
     if "autotune_sample_size" not in st.session_state:
         st.session_state.autotune_sample_size = None
+    if "coarse_autotune_results_df" not in st.session_state:
+        st.session_state.coarse_autotune_results_df = None
+    if "coarse_autotune_save_path" not in st.session_state:
+        st.session_state.coarse_autotune_save_path = _default_coarse_autotune_filename()
+    if "coarse_autotune_load_path" not in st.session_state:
+        st.session_state.coarse_autotune_load_path = ""
+    if "coarse_autotune_save_enabled" not in st.session_state:
+        st.session_state.coarse_autotune_save_enabled = False
+    if "coarse_autotune_load_enabled" not in st.session_state:
+        st.session_state.coarse_autotune_load_enabled = False
 
 
 def _should_recalculate_strike_rate(
@@ -1888,6 +1962,27 @@ def render_strike_rate_section(
             default=("additive", "sole"),
             key="coarse_second_entry_modes",
         )
+        st.divider()
+        save_results_enabled = st.checkbox(
+            "Save results to CSV",
+            key="coarse_autotune_save_enabled",
+        )
+        st.text_input(
+            "Save path",
+            key="coarse_autotune_save_path",
+            help="Relative paths are saved under the dashboard directory.",
+            disabled=not save_results_enabled,
+        )
+        load_results_enabled = st.checkbox(
+            "Load saved results",
+            key="coarse_autotune_load_enabled",
+        )
+        st.text_input(
+            "Load path",
+            key="coarse_autotune_load_path",
+            help="Provide the CSV created by coarse autotune.",
+            disabled=not load_results_enabled,
+        )
     metrics_container = st.container()
     with metrics_container:
         metrics_table = pd.DataFrame(
@@ -1956,7 +2051,30 @@ def render_strike_rate_section(
             st.session_state.autotune_result = None
             st.session_state.autotune_message = "No viable data for autotune"
     if coarse_autotune_clicked:
-        if not coarse_second_entry_modes:
+        if load_results_enabled:
+            load_path_value = st.session_state.coarse_autotune_load_path
+            resolved_load_path = _resolve_results_path(load_path_value)
+            if not resolved_load_path or not os.path.exists(resolved_load_path):
+                st.session_state.coarse_autotune_result = None
+                st.session_state.coarse_autotune_message = "Saved results file not found"
+                st.session_state.coarse_autotune_results_df = None
+            else:
+                try:
+                    loaded_df = pd.read_csv(resolved_load_path)
+                    results_df = _prepare_coarse_results_df(loaded_df)
+                    st.session_state.coarse_autotune_results_df = results_df
+                    best_result = _select_best_coarse_result(results_df, coarse_autotune_objective)
+                    if best_result:
+                        st.session_state.coarse_autotune_result = best_result
+                        st.session_state.coarse_autotune_message = None
+                    else:
+                        st.session_state.coarse_autotune_result = None
+                        st.session_state.coarse_autotune_message = "No viable data in saved results"
+                except Exception as exc:
+                    st.session_state.coarse_autotune_result = None
+                    st.session_state.coarse_autotune_message = f"Failed to load saved results: {exc}"
+                    st.session_state.coarse_autotune_results_df = None
+        elif not coarse_second_entry_modes:
             st.session_state.coarse_autotune_result = None
             st.session_state.coarse_autotune_message = "Select at least one second-entry mode"
         else:
@@ -2022,22 +2140,25 @@ def render_strike_rate_section(
                     progress_callback=_coarse_progress_callback,
                 )
 
-                best_result = None
-                best_score = None
-                for result in coarse_results:
-                    total_count = result.get("total_count")
-                    if total_count in {0, None} or pd.isna(total_count):
-                        continue
-                    expected_pnl = result.get("expected_pnl")
-                    edge = result.get("edge")
-                    score = expected_pnl if coarse_autotune_objective == "expected_pnl" else edge
-                    if score is None or pd.isna(score):
-                        continue
-                    if best_score is None or score > best_score:
-                        best_score = score
-                        best_result = result
+                results_df = _prepare_coarse_results_df(coarse_results)
+                st.session_state.coarse_autotune_results_df = results_df
+                best_result = _select_best_coarse_result(results_df, coarse_autotune_objective)
             progress_container.empty()
             status_container.update(state="complete", label="Coarse autotune complete")
+            if save_results_enabled and st.session_state.coarse_autotune_results_df is not None:
+                save_path_value = st.session_state.coarse_autotune_save_path
+                if not save_path_value:
+                    save_path_value = _default_coarse_autotune_filename()
+                    st.session_state.coarse_autotune_save_path = save_path_value
+                resolved_save_path = _resolve_results_path(save_path_value)
+                if resolved_save_path:
+                    try:
+                        st.session_state.coarse_autotune_results_df.to_csv(
+                            resolved_save_path,
+                            index=False,
+                        )
+                    except Exception as exc:
+                        st.warning(f"Failed to save coarse autotune CSV: {exc}")
             if best_result:
                 st.session_state.coarse_autotune_result = best_result
                 st.session_state.coarse_autotune_message = None
