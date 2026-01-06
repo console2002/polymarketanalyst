@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
 import re
-from autotune import run_autotune
+from autotune import run_autotune, run_coarse_autotune
 from second_entry_autotune import run_second_entry_autotune
 from dashboard_metrics import (
     build_trade_pnl_records,
@@ -1964,128 +1964,78 @@ def render_strike_rate_section(
             status_container = st.status("Coarse autotuning…", expanded=True)
             progress_bar = progress_container.progress(0)
 
-            minutes_values = list(
-                range(coarse_minutes_range[0], coarse_minutes_range[1] + 1, 2)
-            )
-            entry_values = [
-                round(float(value), 2)
-                for value in np.arange(
-                    coarse_entry_range[0],
-                    coarse_entry_range[1] + 0.001,
-                    0.05,
-                )
-            ]
-            hold_values = [
-                round(float(value), 2)
-                for value in np.arange(
-                    coarse_hold_range[0],
-                    coarse_hold_range[1] + 0.001,
-                    0.05,
-                )
-            ]
-            second_entry_values = [
-                round(float(value), 2)
-                for value in np.arange(
-                    coarse_second_entry_threshold_range[0],
-                    coarse_second_entry_threshold_range[1] + 0.001,
-                    0.05,
-                )
-            ]
-            mode_values = [_normalize_second_entry_mode(mode) for mode in coarse_second_entry_modes]
-            total_steps = (
-                len(minutes_values)
-                * len(entry_values)
-                * len(hold_values)
-                * len(second_entry_values)
-                * len(mode_values)
-            )
-            completed_steps = 0
-            best_result = None
-            best_score = None
-
-            def _progress_update(message):
-                if total_steps:
-                    progress_bar.progress(completed_steps / total_steps)
-                status_container.write(message)
-
             with status_container:
-                for minutes_value in minutes_values:
-                    for entry_value in entry_values:
-                        for hold_value in hold_values:
-                            if hold_value < entry_value:
-                                completed_steps += len(second_entry_values) * len(mode_values)
-                                _progress_update(
-                                    (
-                                        "Skipping "
-                                        f"minutes_after_open={minutes_value}, "
-                                        f"entry_threshold={entry_value:.2f}, "
-                                        f"hold_until_close_threshold={hold_value:.2f}"
-                                    )
-                                )
-                                continue
-                            for second_entry_value in second_entry_values:
-                                for mode in mode_values:
-                                    completed_steps += 1
-                                    _progress_update(
-                                        (
-                                            "Evaluating "
-                                            f"minutes_after_open={minutes_value}, "
-                                            f"entry_threshold={entry_value:.2f}, "
-                                            f"hold_until_close_threshold={hold_value:.2f}, "
-                                            f"second_entry_threshold={second_entry_value:.2f}, "
-                                            f"mode={mode}"
-                                        )
-                                    )
-                                    metrics = _calculate_strike_rate_metrics(
-                                        history_df,
-                                        history_time_column,
-                                        minutes_value,
-                                        entry_value,
-                                        hold_value,
-                                        mode,
-                                        second_entry_value,
-                                        trade_value_usd,
-                                        history_segment="autotune",
-                                        precomputed_groups=precomputed_groups,
-                                        precomputed_target_order=precomputed_target_order,
-                                        return_dict=True,
-                                    )
-                                    strike_rate = metrics.get("strike_rate")
-                                    win_rate_needed = metrics.get("win_rate_needed")
-                                    total_count = metrics.get("total_count")
-                                    expected_pnl = metrics.get("expected_pnl")
-                                    expectancy = metrics.get("expectancy")
-                                    if (
-                                        total_count in {0, None}
-                                        or pd.isna(total_count)
-                                    ):
-                                        continue
-                                    edge = (
-                                        strike_rate - win_rate_needed
-                                        if not pd.isna(strike_rate) and not pd.isna(win_rate_needed)
-                                        else np.nan
-                                    )
-                                    if coarse_autotune_objective == "expected_pnl":
-                                        score = expected_pnl
-                                    else:
-                                        score = edge
-                                    if score is None or pd.isna(score):
-                                        continue
-                                    if best_score is None or score > best_score:
-                                        best_score = score
-                                        best_result = {
-                                            "minutes_after_open": minutes_value,
-                                            "entry_threshold": entry_value,
-                                            "hold_until_close_threshold": hold_value,
-                                            "second_entry_threshold": second_entry_value,
-                                            "second_entry_mode": mode,
-                                            "strike_rate": strike_rate,
-                                            "win_rate_needed": win_rate_needed,
-                                            "edge": edge,
-                                            "expectancy": expectancy,
-                                            "expected_pnl": expected_pnl,
-                                            "total_count": total_count,
-                                        }
+                def _coarse_progress_callback(current_step, total_steps, message):
+                    if total_steps:
+                        progress_bar.progress(current_step / total_steps)
+                    status_container.write(message)
+
+                def _coarse_autotune_metrics(
+                    df,
+                    column,
+                    minutes,
+                    threshold,
+                    hold_threshold,
+                    mode,
+                    second_entry_threshold,
+                ):
+                    return _calculate_strike_rate_metrics(
+                        df,
+                        column,
+                        minutes,
+                        threshold,
+                        hold_threshold,
+                        mode,
+                        second_entry_threshold,
+                        trade_value_usd,
+                        history_segment="autotune",
+                        precomputed_groups=precomputed_groups,
+                        precomputed_target_order=precomputed_target_order,
+                        return_dict=True,
+                    )
+
+                coarse_results = run_coarse_autotune(
+                    history_df,
+                    history_time_column,
+                    _coarse_autotune_metrics,
+                    minutes_range=range(
+                        coarse_minutes_range[0],
+                        coarse_minutes_range[1] + 1,
+                        2,
+                    ),
+                    entry_threshold_range=np.arange(
+                        coarse_entry_range[0],
+                        coarse_entry_range[1] + 0.001,
+                        0.05,
+                    ),
+                    hold_until_close_threshold_range=np.arange(
+                        coarse_hold_range[0],
+                        coarse_hold_range[1] + 0.001,
+                        0.05,
+                    ),
+                    second_entry_threshold_range=np.arange(
+                        coarse_second_entry_threshold_range[0],
+                        coarse_second_entry_threshold_range[1] + 0.001,
+                        0.05,
+                    ),
+                    modes=[_normalize_second_entry_mode(mode) for mode in coarse_second_entry_modes],
+                    progress_callback=_coarse_progress_callback,
+                )
+
+                best_result = None
+                best_score = None
+                for result in coarse_results:
+                    total_count = result.get("total_count")
+                    if total_count in {0, None} or pd.isna(total_count):
+                        continue
+                    expected_pnl = result.get("expected_pnl")
+                    edge = result.get("edge")
+                    score = expected_pnl if coarse_autotune_objective == "expected_pnl" else edge
+                    if score is None or pd.isna(score):
+                        continue
+                    if best_score is None or score > best_score:
+                        best_score = score
+                        best_result = result
             progress_container.empty()
             status_container.update(state="complete", label="Coarse autotune complete")
             if best_result:
