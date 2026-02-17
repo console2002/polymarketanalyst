@@ -2331,10 +2331,12 @@ def render_strike_rate_section(
             status_container.update(state="complete", label="Optimization complete")
             _append_optimization_log("Optimization complete.", optimization_log_placeholder)
 
+    optimization_notice = st.session_state.get("optimization_notice")
+    if optimization_notice:
+        st.info(optimization_notice)
+
     if st.session_state.optimization_result:
         result = st.session_state.optimization_result
-        if st.session_state.get("optimization_notice"):
-            st.info(st.session_state.optimization_notice)
         minutes_value_display = _format_minutes_for_ui(result["minutes_after_open"], selected_cadence)
         expected_pnl_display = (
             f"{result['expected_pnl']:.2f}"
