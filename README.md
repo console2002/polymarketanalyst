@@ -66,7 +66,7 @@ Recent updates have brought significant improvements to both the backtesting cap
   - Manual refresh button
   - Auto-refresh toggle
   - "Reset Zoom" - view all historical data
-  - "Zoom Last 15m" - focus on recent activity (follows new data)
+  - "Zoom Last Window" - focus on recent activity for the active profile (follows new data)
   - Scroll zoom and range slider
 
 ### Backtester
@@ -152,15 +152,15 @@ This script will analyze historical data for arbitrage opportunities and report 
 
 ### Dashboard Tips
 - Enable **Auto-refresh** to see updates in real-time as data is logged
-- Use **Zoom Last 15m** to track the most recent market activity
+- Use the latest-window zoom control to track the most recent market activity for the active profile
 - Hover over the charts to see exact values with the unified crosshair
 - The charts are linked - zooming one automatically zooms the other
 
 ## What gets logged
 The logger writes a row per outcome (Up and Down) each time it logs. Files are created per day using US/Eastern dates.
 
-- 15-minute market logs: `data/15min/DDMMYYYY.csv`
-- 5-minute market logs: `data/5min/DDMMYYYY.csv`
+- `btc_15m` profile logs: `data/15min/DDMMYYYY.csv`
+- `btc_5m` profile logs: `data/5min/DDMMYYYY.csv`
 
 | Column | Description |
 | --- | --- |
@@ -190,15 +190,15 @@ The logger writes a row per outcome (Up and Down) each time it logs. Files are c
 ## Daily file rotation
 The logger writes to one CSV file per day using the US/Eastern date (format `DDMMYYYY.csv`). At midnight ET, it switches to a new file automatically.
 
-- 15-minute market rotation path: `data/15min/DDMMYYYY.csv`
-- 5-minute market rotation path: `data/5min/DDMMYYYY.csv`
+- `btc_15m` rotation path: `data/15min/DDMMYYYY.csv`
+- `btc_5m` rotation path: `data/5min/DDMMYYYY.csv`
 
 ## Default market selection
 If you do not provide `--market-type`, the logger starts with the **default profile `btc_15m`** (backward-compatible behavior).
 
 - Default behavior (implicit): `python data_logger.py --ui-stream`
-- Override to 15-minute explicitly: `python data_logger.py --ui-stream --market-type btc_15m`
-- Override to 5-minute explicitly: `python data_logger.py --ui-stream --market-type btc_5m`
+- Override to `btc_15m`: `python data_logger.py --ui-stream --market-type btc_15m`
+- Override to `btc_5m`: `python data_logger.py --ui-stream --market-type btc_5m`
 
 The selected profile controls which active contract window is tracked and where files are written (`data/15min/` vs `data/5min/`). The GUI mirrors the logger's active feed; changing GUI filters does not change logger ingestion, so restart the logger to switch runtime profiles.
 
