@@ -5,10 +5,10 @@ HOLD_EXIT_THRESHOLD = 0.99
 MARKET_WINDOW_MINUTES = 15
 
 
-def align_market_open(timestamp):
+def align_market_open(timestamp, market_window_minutes=MARKET_WINDOW_MINUTES):
     if timestamp is None or pd.isna(timestamp):
         return pd.NaT
-    return pd.Timestamp(timestamp).floor(f"{MARKET_WINDOW_MINUTES}min")
+    return pd.Timestamp(timestamp).floor(f"{int(market_window_minutes)}min")
 
 
 def _last_non_zero(series):
@@ -61,6 +61,7 @@ def calculate_market_trade_records(
     target_order=None,
     precomputed_groups=None,
     precomputed_target_order=None,
+    market_window_minutes=MARKET_WINDOW_MINUTES,
 ):
     if (df is None or df.empty) and not precomputed_groups:
         return []
@@ -98,7 +99,7 @@ def calculate_market_trade_records(
         if market_group.empty:
             continue
 
-        market_open = align_market_open(market_group[time_column].min())
+        market_open = align_market_open(market_group[time_column].min(), market_window_minutes)
         open_threshold_time = market_open + minutes_threshold
         eligible = market_group[market_group[time_column] >= open_threshold_time].copy()
 
@@ -120,7 +121,7 @@ def calculate_market_trade_records(
             if candidates:
                 expected_side, entry_time, entry_price = min(candidates, key=lambda item: item[1])
 
-        market_end_time = market_open + pd.Timedelta(minutes=MARKET_WINDOW_MINUTES)
+        market_end_time = market_open + pd.Timedelta(minutes=market_window_minutes)
         market_close_time = market_group[time_column].iloc[-1]
         target_index = target_indices.get(target_time)
         market_closed = (

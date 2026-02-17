@@ -6,14 +6,13 @@ import numpy as np
 import pandas as pd
 
 from dashboard_processing import (
-    MARKET_WINDOW_MINUTES,
     _find_threshold_crossing,
     _get_close_prices,
     align_market_open,
 )
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache", "second_entry")
-CACHE_SCHEMA_VERSION = 3
+CACHE_SCHEMA_VERSION = 4
 HOLD_EXIT_THRESHOLD = 0.99
 
 
@@ -58,6 +57,7 @@ def _build_second_entry_cache_key(
     hold_until_close_threshold,
     second_entry_threshold,
     second_entry_mode,
+    market_window_minutes,
 ):
     payload = {
         "schema_version": CACHE_SCHEMA_VERSION,
@@ -66,6 +66,7 @@ def _build_second_entry_cache_key(
         "hold_until_close_threshold": float(hold_until_close_threshold),
         "second_entry_threshold": float(second_entry_threshold),
         "second_entry_mode": str(second_entry_mode),
+        "market_window_minutes": int(market_window_minutes),
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -117,6 +118,7 @@ def calculate_market_trade_records_with_second_entry(
     target_order=None,
     precomputed_groups=None,
     precomputed_target_order=None,
+    market_window_minutes=15,
 ):
     if (df is None or df.empty) and not precomputed_groups:
         return []
@@ -130,6 +132,7 @@ def calculate_market_trade_records_with_second_entry(
             hold_until_close_threshold,
             second_entry_threshold,
             second_entry_mode,
+            market_window_minutes,
         )
         cache_path = _get_second_entry_cache_path(cache_key)
         cached_records = _load_second_entry_cache(cache_path)
@@ -171,7 +174,7 @@ def calculate_market_trade_records_with_second_entry(
         if market_group.empty:
             continue
 
-        market_open = align_market_open(market_group[time_column].min())
+        market_open = align_market_open(market_group[time_column].min(), market_window_minutes)
         open_threshold_time = market_open + minutes_threshold
         eligible = market_group[market_group[time_column] >= open_threshold_time].copy()
 
@@ -194,7 +197,7 @@ def calculate_market_trade_records_with_second_entry(
             if candidates:
                 expected_side, trigger_time, trigger_price = min(candidates, key=lambda item: item[1])
 
-        market_end_time = market_open + pd.Timedelta(minutes=MARKET_WINDOW_MINUTES)
+        market_end_time = market_open + pd.Timedelta(minutes=market_window_minutes)
         market_close_time = market_group[time_column].iloc[-1]
         target_index = target_indices.get(target_time)
         market_closed = (
@@ -350,6 +353,7 @@ def calculate_market_trade_records(
     target_order=None,
     precomputed_groups=None,
     precomputed_target_order=None,
+    market_window_minutes=15,
 ):
     return calculate_market_trade_records_with_second_entry(
         df,
@@ -364,4 +368,5 @@ def calculate_market_trade_records(
         target_order=target_order,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
+        market_window_minutes=market_window_minutes,
     )
