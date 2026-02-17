@@ -12,7 +12,8 @@ from dashboard_processing import (
 )
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache", "second_entry")
-CACHE_SCHEMA_VERSION = 6
+CACHE_SCHEMA_VERSION = 7
+EARLY_CLOSE_THRESHOLD = 0.99
 
 
 def _find_pullback_crossing(series, threshold):
@@ -21,6 +22,18 @@ def _find_pullback_crossing(series, threshold):
     if crossings.any():
         return crossings[crossings].index[0]
     return None
+
+
+def _find_early_close_snapshot(market_group, time_column, close_threshold=EARLY_CLOSE_THRESHOLD):
+    reached_close = (market_group["UpPrice"] >= close_threshold) | (market_group["DownPrice"] >= close_threshold)
+    if not reached_close.any():
+        return None, None, None
+
+    close_index = reached_close[reached_close].index[0]
+    close_time = market_group.loc[close_index, time_column]
+    close_up = market_group.loc[close_index, "UpPrice"]
+    close_down = market_group.loc[close_index, "DownPrice"]
+    return close_time, close_up, close_down
 
 
 def _ensure_cache_dir():
@@ -205,10 +218,19 @@ def calculate_market_trade_records_with_second_entry(
 
         market_end_time = market_open + pd.Timedelta(minutes=market_window_minutes)
         market_close_time = market_group[time_column].iloc[-1]
+        close_up, close_down = _get_close_prices(market_group, time_column)
+        early_close_time, early_close_up, early_close_down = _find_early_close_snapshot(market_group, time_column)
+        effective_close_time = market_close_time
+        if early_close_time is not None:
+            effective_close_time = early_close_time
+            close_up = early_close_up
+            close_down = early_close_down
+
         target_index = target_indices.get(target_time)
         market_closed = (
             (target_index is not None and target_index < last_index)
             or market_close_time >= market_end_time
+            or early_close_time is not None
         )
 
         entry_time = None
@@ -226,6 +248,7 @@ def calculate_market_trade_records_with_second_entry(
                 trade_executed = True
             else:
                 eligible_after_trigger = eligible[eligible[time_column] >= trigger_time]
+                eligible_after_trigger = eligible_after_trigger[eligible_after_trigger[time_column] <= effective_close_time]
                 if not second_entry_taken:
                     pullback_index = _find_pullback_crossing(eligible_after_trigger[side_column], second_threshold)
                     if pullback_index is not None:
@@ -243,8 +266,6 @@ def calculate_market_trade_records_with_second_entry(
                     entry_time = trigger_time
                     entry_price = trigger_price
                     trade_executed = entry_time is not None and entry_price is not None
-
-        close_up, close_down = _get_close_prices(market_group, time_column)
         exit_time = None
         exit_price = None
         exit_price_market = None
@@ -256,7 +277,7 @@ def calculate_market_trade_records_with_second_entry(
             and not pd.isna(entry_price)
         )
         if entry_valid and entry_price > 0:
-            exit_time = market_close_time
+            exit_time = effective_close_time
             exit_reason = "held_to_close"
             exit_price = close_up if expected_side == "Up" else close_down
             exit_price_market = exit_price
@@ -298,7 +319,7 @@ def calculate_market_trade_records_with_second_entry(
                     "target_time": market_group["TargetTime"].iloc[0] if "TargetTime" in market_group.columns else None,
                     "market_open": market_open,
                     "open_threshold_time": open_threshold_time,
-                    "market_close_time": market_close_time,
+                    "market_close_time": effective_close_time,
                     "expected_side": expected_side,
                     "trigger_time": trigger_time,
                     "trigger_price": trigger_price,

@@ -80,3 +80,28 @@ def test_second_entry_processing_holds_to_market_close_when_entry_is_at_or_above
     assert record["entry_price"] == 0.70
     assert record["exit_reason"] == "held_to_close"
     assert record["exit_time"] == pd.Timestamp("2024-01-01 00:15:00")
+
+
+def test_second_entry_does_not_trigger_after_market_reaches_99_percent():
+    df = _build_market_df([0.50, 0.77, 0.99, 0.40], down_prices=[0.50, 0.23, 0.01, 0.60])
+
+    records = calculate_market_trade_records_with_second_entry(
+        df,
+        time_column="timestamp",
+        minutes_after_open=0,
+        entry_threshold=0.70,
+        hold_until_close_threshold=0.65,
+        time_format="%Y-%m-%d %H:%M:%S",
+        second_entry_threshold=0.40,
+        second_entry_mode="additive",
+        use_cache=False,
+    )
+
+    record = records[0]
+    assert record["trigger_price"] == 0.77
+    assert record["second_entry_time"] is None
+    assert record["position_multiplier"] == 1
+    assert record["exit_time"] == pd.Timestamp("2024-01-01 00:10:00")
+    assert record["market_close_time"] == pd.Timestamp("2024-01-01 00:10:00")
+    assert record["outcome"] == "Win"
+    assert record["exit_price"] == 1.0
