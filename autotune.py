@@ -116,6 +116,7 @@ def run_coarse_autotune(
     save_path=None,
     run_id=None,
     incremental_save=False,
+    min_total_count=0,
 ):
     results = []
     minutes_values = list(minutes_range)
@@ -135,6 +136,9 @@ def run_coarse_autotune(
     for minutes_value in minutes_values:
         for entry_value in entry_values:
             for hold_value in hold_values:
+                if hold_value < entry_value:
+                    completed_steps += len(second_entry_values) * len(mode_values)
+                    continue
                 for second_entry_value in second_entry_values:
                     for mode in mode_values:
                         completed_steps += 1
@@ -208,6 +212,17 @@ def run_coarse_autotune(
                             "expected_pnl": expected_pnl,
                             "total_count": total_count,
                         }
+                        if (
+                            min_total_count
+                            and (
+                                total_count in {None, 0}
+                                or pd.isna(total_count)
+                                or float(total_count) < float(min_total_count)
+                            )
+                        ):
+                            row["edge"] = np.nan
+                            row["expectancy"] = np.nan
+                            row["expected_pnl"] = np.nan
                         results.append(row)
                         if incremental_save and save_path:
                             header_needed = not os.path.exists(save_path) or os.path.getsize(save_path) == 0
