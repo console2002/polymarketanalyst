@@ -410,8 +410,14 @@ selected_profile_key = st.sidebar.selectbox(
     "Market profile",
     options=MARKET_PROFILE_OPTIONS,
     index=default_profile_index,
+    key="selected_market_profile",
     help="Select the profile used for market lists and logger startup arguments.",
 )
+previous_profile_key = st.session_state.get("active_profile_key")
+profile_changed = (
+    previous_profile_key is not None and previous_profile_key != selected_profile_key
+)
+st.session_state.active_profile_key = selected_profile_key
 scheme, host, port = _parse_ws_target(ws_url)
 logger_proc = _get_logger_process()
 logger_running = logger_proc is not None
@@ -551,10 +557,14 @@ current_market = get_current_market_urls(profile_key=selected_profile_key)
 market_by_url = {market["polymarket"]: market for market in market_options}
 option_urls = list(market_by_url.keys())
 current_url = current_market["polymarket"]
+if profile_changed:
+    st.session_state.override_market = False
+    st.session_state.market_selection_url = current_url
 default_index = option_urls.index(current_url) if current_url in option_urls else 0
 override_market = st.sidebar.checkbox(
     "Override auto market",
     value=False,
+    key="override_market",
     help=(
         "Overrides only the GUI display market. Logger feed/profile remain unchanged "
         "until you restart the logger."
