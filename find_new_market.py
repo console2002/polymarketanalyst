@@ -11,6 +11,14 @@ def _market_profile(profile_key=None):
     selected_key = profile_key or default_market_profile_key()
     return get_market_profile(selected_key)
 
+
+def _normalize_utc(target_time):
+    """Return a timezone-aware UTC datetime."""
+
+    if target_time.tzinfo is None:
+        return pytz.utc.localize(target_time)
+    return target_time.astimezone(pytz.utc)
+
 def generate_slug(target_time):
     """
     Generates the Polymarket event slug for a given datetime.
@@ -36,6 +44,14 @@ def generate_slug(target_time):
     slug = f"bitcoin-up-or-down-{month}-{day}-{hour_int}{am_pm}-et"
     return slug
 
+def generate_interval_slug(target_time, slug_prefix):
+    """Return a timestamp-based slug for a market interval."""
+
+    normalized_time = _normalize_utc(target_time)
+    timestamp = int(normalized_time.timestamp())
+    return f"{slug_prefix}-{timestamp}"
+
+
 def generate_profile_slug(target_time, profile_key=None):
     """
     Generates the Polymarket event slug for a configured market profile.
@@ -44,12 +60,7 @@ def generate_profile_slug(target_time, profile_key=None):
     """
     profile = _market_profile(profile_key)
 
-    # Ensure time is in UTC for timestamp calculation
-    if target_time.tzinfo is None:
-        target_time = pytz.utc.localize(target_time)
-
-    timestamp = int(target_time.timestamp())
-    return f"{profile.slug_prefix}-{timestamp}"
+    return generate_interval_slug(target_time, profile.slug_prefix)
 
 
 def generate_15m_slug(target_time):
@@ -57,16 +68,24 @@ def generate_15m_slug(target_time):
 
     return generate_profile_slug(target_time, profile_key="btc_15m")
 
+def generate_market_url_for_profile(target_time, profile):
+    """Generate the full Polymarket URL for a resolved profile."""
+
+    slug = generate_interval_slug(target_time, profile.slug_prefix)
+    return f"{BASE_URL}{slug}"
+
+
 def generate_market_url(target_time, profile_key=None):
     """
     Generates the full Polymarket URL for a given datetime.
     Detects if it should be an hourly or 15-minute market based on minutes?
     Actually, let's switch entirely to 15m markets as requested.
     """
-    slug = generate_profile_slug(target_time, profile_key=profile_key)
-    return f"{BASE_URL}{slug}"
+    selected_profile_key = profile_key or default_market_profile_key()
+    profile = _market_profile(selected_profile_key)
+    return generate_market_url_for_profile(target_time, profile)
 
-def get_next_market_urls(num_hours=5, profile_key=None):
+def get_next_market_urls(num_hours=5, profile_key=None, cadence_minutes=None):
     """
     Generates URLs for the next 'num_hours' 15-minute markets.
     """
@@ -80,17 +99,18 @@ def get_next_market_urls(num_hours=5, profile_key=None):
     
     base_time = now.replace(second=0, microsecond=0)
     minutes = base_time.minute
-    remainder = minutes % profile.window_minutes
+    cadence = cadence_minutes or profile.window_minutes
+    remainder = minutes % cadence
     current_quarter = base_time - datetime.timedelta(minutes=remainder)
 
-    windows_per_hour = int(60 / profile.window_minutes)
+    windows_per_hour = int(60 / cadence)
     for i in range(num_hours * windows_per_hour): # Fetch enough for X hours
-        target_time = current_quarter + datetime.timedelta(minutes=profile.window_minutes * i)
+        target_time = current_quarter + datetime.timedelta(minutes=cadence * i)
         urls.append(generate_market_url(target_time, profile_key=profile.key))
         
     return urls
 
-def get_current_market_url(profile_key=None):
+def get_current_market_url(profile_key=None, cadence_minutes=None):
     """
     Determines the URL for the 'current' necessary market.
     Logic: The current 15-min market start.
@@ -101,7 +121,8 @@ def get_current_market_url(profile_key=None):
     # Calculate current 15-minute interval start
     base_time = now.replace(second=0, microsecond=0)
     minutes = base_time.minute
-    remainder = minutes % profile.window_minutes
+    cadence = cadence_minutes or profile.window_minutes
+    remainder = minutes % cadence
     current_quarter = base_time - datetime.timedelta(minutes=remainder)
     return generate_market_url(current_quarter, profile_key=profile.key)
 
