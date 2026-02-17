@@ -2,12 +2,13 @@ import numpy as np
 import pandas as pd
 
 HOLD_EXIT_THRESHOLD = 0.99
+MARKET_WINDOW_MINUTES = 15
 
 
 def align_market_open(timestamp):
     if timestamp is None or pd.isna(timestamp):
         return pd.NaT
-    return pd.Timestamp(timestamp).floor("15min")
+    return pd.Timestamp(timestamp).floor(f"{MARKET_WINDOW_MINUTES}min")
 
 
 def _last_non_zero(series):
@@ -117,7 +118,7 @@ def calculate_market_trade_records(
             if candidates:
                 expected_side, entry_time, entry_price = min(candidates, key=lambda item: item[1])
 
-        market_end_time = market_open + pd.Timedelta(minutes=15)
+        market_end_time = market_open + pd.Timedelta(minutes=MARKET_WINDOW_MINUTES)
         market_close_time = market_group[time_column].iloc[-1]
         target_index = target_indices.get(target_time)
         market_closed = (

@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from dashboard_processing import (
+    MARKET_WINDOW_MINUTES,
     _find_threshold_crossing,
     _get_close_prices,
     align_market_open,
@@ -191,7 +192,7 @@ def calculate_market_trade_records_with_second_entry(
             if candidates:
                 expected_side, trigger_time, trigger_price = min(candidates, key=lambda item: item[1])
 
-        market_end_time = market_open + pd.Timedelta(minutes=15)
+        market_end_time = market_open + pd.Timedelta(minutes=MARKET_WINDOW_MINUTES)
         market_close_time = market_group[time_column].iloc[-1]
         target_index = target_indices.get(target_time)
         market_closed = (
