@@ -1,4 +1,5 @@
 import hashlib
+import html
 import json
 import logging
 import numpy as np
@@ -116,6 +117,36 @@ def _humanize_autotune_progress_message(message, cadence_key):
         return f"minutes_after_open={_format_minutes_for_ui(minutes_value, cadence_key)}"
 
     return re.sub(r"minutes_after_open=([0-9]*\.?[0-9]+)", _replace_minutes, message)
+
+
+def _append_optimization_log(message, log_placeholder=None):
+    if not message:
+        return
+    if "optimization_log_lines" not in st.session_state:
+        st.session_state.optimization_log_lines = []
+    st.session_state.optimization_log_lines.append(str(message))
+    if log_placeholder is not None:
+        _render_optimization_log_window(log_placeholder)
+
+
+def _render_optimization_log_window(log_placeholder):
+    if "optimization_log_lines" not in st.session_state:
+        st.session_state.optimization_log_lines = []
+    log_lines = st.session_state.optimization_log_lines
+    if log_lines:
+        log_content = "<br>".join(html.escape(line) for line in log_lines)
+    else:
+        log_content = "Optimization logs will appear here."
+    log_placeholder.markdown(
+        (
+            "<div style=\"height: 220px; overflow-y: auto; border: 1px solid #d9d9d9; "
+            "border-radius: 0.5rem; padding: 0.5rem; background-color: #fafafa; "
+            "font-family: monospace; font-size: 0.85rem;\">"
+            f"{log_content}"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def add_vline_all_rows(fig, x, **kwargs):
@@ -1063,6 +1094,8 @@ def _initialize_strike_rate_state(
         st.session_state.optimization_result = None
     if "optimization_message" not in st.session_state:
         st.session_state.optimization_message = None
+    if "optimization_notice" not in st.session_state:
+        st.session_state.optimization_notice = None
     if "strike_sample_size" not in st.session_state:
         st.session_state.strike_sample_size = None
     if "autotune_sample_size" not in st.session_state:
@@ -1073,6 +1106,8 @@ def _initialize_strike_rate_state(
         st.session_state.coarse_autotune_save_path = _default_coarse_autotune_filename()
     if "coarse_autotune_save_enabled" not in st.session_state:
         st.session_state.coarse_autotune_save_enabled = False
+    if "optimization_log_lines" not in st.session_state:
+        st.session_state.optimization_log_lines = []
 
 
 def _should_recalculate_strike_rate(
@@ -1962,6 +1997,7 @@ def render_strike_rate_section(
     selected_cadence_minutes,
     precomputed_groups=None,
     precomputed_target_order=None,
+    optimization_log_placeholder=None,
 ):
     strike_rate = summary_state["strike_rate"]
     avg_entry_price = summary_state["avg_entry_price"]
@@ -2105,10 +2141,14 @@ def render_strike_rate_section(
         )
 
     if optimization_clicked:
+        st.session_state.optimization_log_lines = []
+        st.session_state.optimization_notice = None
+        _append_optimization_log("Starting optimization run (phase 1 + phase 2)", optimization_log_placeholder)
         if not coarse_second_entry_modes:
             st.session_state.optimization_result = None
             st.session_state.optimization_message = "Select at least one second-entry mode"
             st.session_state.coarse_autotune_results_df = None
+            _append_optimization_log("Select at least one second-entry mode.", optimization_log_placeholder)
         else:
             min_total_count = int(st.session_state.get("min_autotune_samples", 200))
             progress_container = st.empty()
@@ -2119,9 +2159,9 @@ def render_strike_rate_section(
                 def _coarse_progress_callback(current_step, total_steps, message):
                     if total_steps:
                         progress_bar.progress(current_step / total_steps)
-                    status_container.write(
-                        _humanize_autotune_progress_message(message, selected_cadence)
-                    )
+                    humanized_message = _humanize_autotune_progress_message(message, selected_cadence)
+                    status_container.write(humanized_message)
+                    _append_optimization_log(humanized_message, optimization_log_placeholder)
 
                 def _phase1_metrics(df, column, minutes, threshold, hold_threshold, mode, second_entry_value):
                     return _calculate_strike_rate_metrics(
@@ -2165,7 +2205,9 @@ def render_strike_rate_section(
                 resolved_save_path = _resolve_results_path(save_path_value) if save_results_enabled else None
 
                 # Phase 1: second entry forced off for fast scout
-                status_container.caption("Phase 1/2: scouting base entry setup with second-entry disabled")
+                phase1_caption = "Phase 1/2: scouting base entry setup with second-entry disabled"
+                status_container.caption(phase1_caption)
+                _append_optimization_log(phase1_caption, optimization_log_placeholder)
                 phase1_results = run_coarse_autotune(
                     history_df,
                     history_time_column,
@@ -2189,29 +2231,37 @@ def render_strike_rate_section(
                     modes=["off"],
                     progress_callback=_coarse_progress_callback,
                     run_id=f"{run_id}_phase1",
-                    min_total_count=min_total_count,
+                    min_total_count=0,
                 )
                 phase1_df = _prepare_coarse_results_df(phase1_results)
                 phase1_df = phase1_df.dropna(subset=["expected_pnl", "total_count"])
-                phase1_df = phase1_df[phase1_df["total_count"] >= min_total_count]
                 if phase1_df.empty:
                     st.session_state.optimization_result = None
-                    st.session_state.optimization_message = (
-                        "No viable phase-1 candidates met minimum sample count"
-                    )
+                    st.session_state.optimization_message = "No viable phase-1 candidates"
                     st.session_state.coarse_autotune_results_df = None
                 else:
-                    top_n = min(8, len(phase1_df))
-                    top_phase1 = phase1_df.nlargest(top_n, "expected_pnl")
+                    phase1_eligible_df = phase1_df[phase1_df["total_count"] >= min_total_count]
+                    phase1_candidates_df = phase1_eligible_df if not phase1_eligible_df.empty else phase1_df
+                    if phase1_eligible_df.empty:
+                        notice = (
+                            f"No phase-1 candidates met minimum sample count ({min_total_count}). "
+                            "Proceeding with lower-sample candidates."
+                        )
+                        st.session_state.optimization_notice = notice
+                        _append_optimization_log(notice, optimization_log_placeholder)
+                    top_n = min(8, len(phase1_candidates_df))
+                    top_phase1 = phase1_candidates_df.nlargest(top_n, "expected_pnl")
                     candidate_pairs = sorted(
                         {
                             (float(row["minutes_after_open"]), float(row["entry_threshold"]))
                             for _, row in top_phase1.iterrows()
                         }
                     )
-                    status_container.caption(
+                    phase2_caption = (
                         f"Phase 2/2: refining {len(candidate_pairs)} top phase-1 candidates with second-entry"
                     )
+                    status_container.caption(phase2_caption)
+                    _append_optimization_log(phase2_caption, optimization_log_placeholder)
 
                     pair_set = {(round(m, 6), round(e, 2)) for m, e in candidate_pairs}
 
@@ -2255,13 +2305,21 @@ def render_strike_rate_section(
                         save_path=resolved_save_path,
                         run_id=f"{run_id}_phase2",
                         incremental_save=bool(resolved_save_path),
-                        min_total_count=min_total_count,
+                        min_total_count=0,
                     )
                     results_df = _prepare_coarse_results_df(phase2_results)
                     results_df = results_df.dropna(subset=["expected_pnl", "total_count"])
-                    results_df = results_df[results_df["total_count"] >= min_total_count]
-                    st.session_state.coarse_autotune_results_df = results_df
-                    best_result = _select_best_coarse_result(results_df, "expected_pnl")
+                    eligible_results_df = results_df[results_df["total_count"] >= min_total_count]
+                    final_results_df = eligible_results_df if not eligible_results_df.empty else results_df
+                    if eligible_results_df.empty and not results_df.empty:
+                        notice = (
+                            f"No phase-2 candidates met minimum sample count ({min_total_count}). "
+                            "Showing best lower-sample result."
+                        )
+                        st.session_state.optimization_notice = notice
+                        _append_optimization_log(notice, optimization_log_placeholder)
+                    st.session_state.coarse_autotune_results_df = final_results_df
+                    best_result = _select_best_coarse_result(final_results_df, "expected_pnl")
                     if best_result:
                         st.session_state.optimization_result = best_result
                         st.session_state.optimization_message = None
@@ -2271,9 +2329,12 @@ def render_strike_rate_section(
 
             progress_container.empty()
             status_container.update(state="complete", label="Optimization complete")
+            _append_optimization_log("Optimization complete.", optimization_log_placeholder)
 
     if st.session_state.optimization_result:
         result = st.session_state.optimization_result
+        if st.session_state.get("optimization_notice"):
+            st.info(st.session_state.optimization_notice)
         minutes_value_display = _format_minutes_for_ui(result["minutes_after_open"], selected_cadence)
         expected_pnl_display = (
             f"{result['expected_pnl']:.2f}"
@@ -2645,6 +2706,9 @@ def render_dashboard():
                 key="auto_refresh",
                 value=st.session_state.get("auto_refresh", False),
             )
+            st.caption("Optimization log")
+            optimization_log_placeholder = st.empty()
+            _render_optimization_log_window(optimization_log_placeholder)
         with header_cols[1]:
             render_strike_rate_section(
                 summary_state,
@@ -2657,6 +2721,7 @@ def render_dashboard():
                 selected_cadence_minutes,
                 precomputed_groups=history_market_groups,
                 precomputed_target_order=history_target_order,
+                optimization_log_placeholder=optimization_log_placeholder,
             )
         with header_cols[2]:
             market_summary_table = build_market_summary_table(
