@@ -28,6 +28,10 @@ LAUNCH_LOG_MAX_LINES = 20
 STREAM_INACTIVE_THRESHOLD_SECONDS = 20
 LOGGER_PID_FILE = os.path.join(os.path.dirname(__file__), "data_logger_ui.pid")
 _LOGGER_PROCESS = None
+MARKET_TYPE_OPTIONS = {
+    "15m": "btc_15m",
+    "5m": "btc_5m",
+}
 
 
 def _listener_worker(url, out_queue, stop_event):
@@ -166,7 +170,8 @@ def _format_market_label(market):
     start_et = market["target_time_et"]
     expiration_utc = market["expiration_time_utc"]
     slug = market["polymarket"].split("/")[-1]
-    return f"{start_et:%b %d %I:%M %p ET} → {expiration_utc:%H:%M UTC} ({slug})"
+    cadence_label = market.get("cadence_label", "?")
+    return f"[{cadence_label}] {start_et:%b %d %I:%M %p ET} → {expiration_utc:%H:%M UTC} ({slug})"
 
 
 def _get_logger_process():
@@ -297,7 +302,7 @@ def _enqueue_process_output(stream, label, out_queue):
     stream.close()
 
 
-def _start_logger_process(host, port):
+def _start_logger_process(host, port, market_type):
     logger_path = os.path.join(os.path.dirname(__file__), "data_logger.py")
     command = [
         sys.executable,
@@ -308,6 +313,8 @@ def _start_logger_process(host, port):
         host,
         "--ui-stream-port",
         str(port),
+        "--market-type",
+        market_type,
     ]
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -395,6 +402,13 @@ st.sidebar.caption(
     "Read-only consumer. Updates are best-effort and may skip under load to keep the logger fast."
 )
 ws_url = st.sidebar.text_input("WebSocket URL", value=DEFAULT_WS_URL)
+selected_market_type_label = st.sidebar.selectbox(
+    "Market cadence",
+    options=list(MARKET_TYPE_OPTIONS.keys()),
+    index=0,
+    help="Select which market cadence the GUI should display and offer for logger startup.",
+)
+selected_profile_key = MARKET_TYPE_OPTIONS[selected_market_type_label]
 scheme, host, port = _parse_ws_target(ws_url)
 logger_proc = _get_logger_process()
 logger_running = logger_proc is not None
@@ -402,6 +416,7 @@ can_manage_logger = scheme in {"ws", ""} and host in {"127.0.0.1", "localhost"}
 _ensure_launch_log()
 _drain_launch_log_queue()
 st.sidebar.subheader("Logger Control")
+st.sidebar.caption(f"Logger start uses --market-type {selected_profile_key}.")
 if not can_manage_logger:
     st.sidebar.info("Start/Stop is available only for local ws:// endpoints.")
 
@@ -431,7 +446,7 @@ stop_clicked = st.sidebar.button(
 if start_clicked and not logger_running and can_manage_logger:
     st.session_state.logger_error = None
     _append_launch_log("Attempting logger start.")
-    logger_proc, start_error = _start_logger_process(host, port)
+    logger_proc, start_error = _start_logger_process(host, port, selected_profile_key)
     time.sleep(0.5)
     _drain_launch_log_queue()
     if start_error:
@@ -525,8 +540,8 @@ buffer_size = st.sidebar.slider(
 )
 st.session_state.buffer_size = buffer_size
 st.sidebar.subheader("Market Selection")
-market_options = get_available_market_urls()
-current_market = get_current_market_urls()
+market_options = get_available_market_urls(market_type=selected_market_type_label)
+current_market = get_current_market_urls(market_type=selected_market_type_label)
 market_by_url = {market["polymarket"]: market for market in market_options}
 option_urls = list(market_by_url.keys())
 current_url = current_market["polymarket"]
@@ -552,7 +567,7 @@ if override_market:
         )
 else:
     selected_market = current_market
-    st.sidebar.caption("Auto-advance enabled (next 15-minute market).")
+    st.sidebar.caption(f"Auto-advance enabled (next {selected_market_type_label} market).")
 
 _ensure_listener(ws_url)
 _drain_messages()
@@ -580,7 +595,7 @@ else:
 
 st.title("Live Logger Feed")
 st.caption(f"Logger status: {status_label}")
-st.caption(f"GUI Market: {selected_market['polymarket']}")
+st.caption(f"GUI Market [{selected_market.get('cadence_label', selected_market_type_label)}]: {selected_market['polymarket']}")
 if last_update:
     st.caption(f"Last update (UTC): {last_update}")
 else:
