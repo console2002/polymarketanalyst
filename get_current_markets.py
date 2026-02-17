@@ -5,23 +5,23 @@ from market_profiles import default_market_profile_key, get_market_profile
 
 def get_current_market_urls(profile_key=None):
     """
-    Returns a dictionary with the current active market URL for Polymarket (15-min markets).
-    'Current' is defined as the market starting at the current 15-minute interval.
+    Returns a dictionary with the current active market URL for Polymarket.
+    'Current' is defined as the market starting at the current profile interval
+    (for example, 5m or 15m depending on ``profile_key``).
     """
     profile = get_market_profile(profile_key or default_market_profile_key())
     now = datetime.datetime.now(pytz.utc)
     
-    # Target time is the current 15-minute mark
-    # Example: If now is 12:05, target is 12:00.
+    # Target time is the current profile interval mark.
     base_time = now.replace(second=0, microsecond=0)
     minutes = base_time.minute
     remainder = minutes % profile.window_minutes
     start_time_utc = base_time - datetime.timedelta(minutes=remainder)
     
-    # The "Expiration Time" of this 15-min candle is 15 minutes after start.
+    # Expiration is profile-window minutes after start.
     expiration_time_utc = start_time_utc + datetime.timedelta(minutes=profile.window_minutes)
 
-    # 15m Polymarket slugs use the start timestamp.
+    # Interval slugs use the start timestamp.
     polymarket_url = generate_polymarket_url(start_time_utc, profile_key=profile.key)
     
     return {
@@ -34,7 +34,8 @@ def get_current_market_urls(profile_key=None):
 
 def get_available_market_urls(num_markets=12, profile_key=None):
     """
-    Returns a list of upcoming 15-minute Polymarket URLs starting from the current market.
+    Returns a list of upcoming Polymarket URLs starting from the current market
+    using the selected profile cadence (e.g. 5m/15m).
     """
     profile = get_market_profile(profile_key or default_market_profile_key())
     current_market = get_current_market_urls(profile_key=profile.key)

@@ -157,17 +157,25 @@ def _parse_iso_datetime(value):
 
 def _market_window_from_slug(slug, profile_key=None):
     profile = _selected_profile(profile_key)
-    match = re.search(rf"{re.escape(profile.slug_prefix)}-(\d+)", slug or "")
+    match = re.search(r"btc-updown-(\d+)m-(\d+)", slug or "")
     if not match:
-        return None, None
+        # Compatibility fallback for profile-specific slug prefixes.
+        match = re.search(rf"{re.escape(profile.slug_prefix)}-(\d+)", slug or "")
+        if not match:
+            return None, None
+        window_minutes = profile.window_minutes
+        timestamp = match.group(1)
+    else:
+        window_minutes = int(match.group(1))
+        timestamp = match.group(2)
     try:
         target_time = datetime.datetime.fromtimestamp(
-            int(match.group(1)),
+            int(timestamp),
             tz=datetime.timezone.utc,
         )
     except (ValueError, OSError, OverflowError):
         return None, None
-    expiration = target_time + datetime.timedelta(minutes=profile.window_minutes)
+    expiration = target_time + datetime.timedelta(minutes=window_minutes)
     return target_time, expiration
 
 
@@ -259,11 +267,11 @@ def resolve_market_by_slug(slug):
     }, None
 
 
-def fetch_polymarket_data_struct():
+def fetch_polymarket_data_struct(profile_key=None):
     """
     Fetches current Polymarket market metadata (token IDs, outcomes, times).
     """
-    return resolve_current_market()
+    return resolve_current_market(profile_key=profile_key)
 
 
 def resolve_market_by_start_time(start_time_utc, profile_key=None):
