@@ -12,7 +12,12 @@ from plotly.subplots import make_subplots
 import datetime
 import re
 import uuid
-from autotune import count_valid_parameter_combinations, run_coarse_autotune
+from autotune import (
+    count_valid_parameter_combinations,
+    count_valid_parameter_combinations_for_pairs,
+    run_coarse_autotune,
+    run_coarse_autotune_for_pairs,
+)
 from dashboard_metrics import (
     build_trade_pnl_records,
     summarize_drawdowns,
@@ -2354,40 +2359,33 @@ def render_strike_rate_section(
                             for _, row in top_phase1.iterrows()
                         }
                     )
+                    phase2_combination_total = count_valid_parameter_combinations_for_pairs(
+                        candidate_pairs,
+                        np.arange(
+                            coarse_hold_range[0],
+                            coarse_hold_range[1] + 0.001,
+                            coarse_hold_step,
+                        ),
+                        np.arange(
+                            coarse_second_entry_threshold_range[0],
+                            coarse_second_entry_threshold_range[1] + 0.001,
+                            coarse_second_entry_step,
+                        ),
+                        [_normalize_second_entry_mode(mode) for mode in coarse_second_entry_modes],
+                    )
                     phase2_caption = (
                         f"Phase 2/2: refining {len(candidate_pairs)} top phase-1 candidates by sweeping "
-                        "hold, second-entry threshold, and second-entry mode"
+                        "hold, second-entry threshold, and second-entry mode "
+                        f"(combinations={phase2_combination_total})"
                     )
                     status_container.caption(phase2_caption)
                     _append_optimization_log(phase2_caption, optimization_log_placeholder)
 
-                    pair_set = {(round(m, 6), round(e, 2)) for m, e in candidate_pairs}
-
-                    def _phase2_filtered_metrics(df, column, minutes, threshold, hold_threshold, mode, second_entry_value):
-                        if (round(float(minutes), 6), round(float(threshold), 2)) not in pair_set:
-                            return {
-                                "strike_rate": np.nan,
-                                "win_rate_needed": np.nan,
-                                "total_count": 0,
-                                "expectancy": np.nan,
-                                "expected_pnl": np.nan,
-                            }
-                        return _phase2_metrics(
-                            df,
-                            column,
-                            minutes,
-                            threshold,
-                            hold_threshold,
-                            mode,
-                            second_entry_value,
-                        )
-
-                    phase2_results = run_coarse_autotune(
+                    phase2_results = run_coarse_autotune_for_pairs(
                         history_df,
                         history_time_column,
-                        _phase2_filtered_metrics,
-                        minutes_range=np.array([m for m, _ in candidate_pairs]),
-                        entry_threshold_range=np.array([e for _, e in candidate_pairs]),
+                        _phase2_metrics,
+                        minutes_entry_pairs=candidate_pairs,
                         hold_until_close_threshold_range=np.arange(
                             coarse_hold_range[0],
                             coarse_hold_range[1] + 0.001,
@@ -2406,6 +2404,14 @@ def render_strike_rate_section(
                         min_total_count=0,
                     )
                     results_df = _prepare_coarse_results_df(phase2_results)
+                    shortlisted_pairs = {(round(float(m), 6), round(float(e), 2)) for m, e in candidate_pairs}
+                    scored_pairs = {
+                        (round(float(row["minutes_after_open"]), 6), round(float(row["entry_threshold"]), 2))
+                        for _, row in results_df.iterrows()
+                    }
+                    assert scored_pairs.issubset(shortlisted_pairs), (
+                        "Phase 2 integrity failure: scored candidates include non-shortlisted phase-1 pairs"
+                    )
                     results_df = results_df.dropna(subset=["expected_pnl", "total_count"])
                     phase2_filter_summary = _build_filter_summary(results_df, min_total_count)
                     st.session_state.optimization_filter_summaries = {
