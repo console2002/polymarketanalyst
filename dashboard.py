@@ -26,6 +26,7 @@ from second_entry_processing import calculate_market_trade_records_with_second_e
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) or os.getcwd()
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
+EXPECTED_MARKET_CADENCE_MINUTES = 15
 CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache", "second_entry")
 CACHE_SCHEMA_VERSION = 2
 COARSE_AUTOTUNE_COLUMNS = [
@@ -223,6 +224,32 @@ def _reshape_new_style_csv(df):
     return wide
 
 
+def _detect_market_cadence_minutes(df):
+    if df is None or df.empty or "TargetTime" not in df.columns:
+        return None
+    target_times = pd.to_datetime(df["TargetTime"], format=TIME_FORMAT, errors="coerce").dropna()
+    if target_times.empty:
+        return None
+    unique_targets = pd.Series(target_times.unique()).sort_values()
+    if len(unique_targets) < 2:
+        return None
+    diffs = unique_targets.diff().dropna()
+    if diffs.empty:
+        return None
+    diff_minutes = (diffs.dt.total_seconds() / 60).round().astype(int)
+    diff_minutes = diff_minutes[diff_minutes > 0]
+    if diff_minutes.empty:
+        return None
+    return int(diff_minutes.mode().iloc[0])
+
+
+def _is_compatible_cadence(df, expected_cadence_minutes):
+    detected_cadence = _detect_market_cadence_minutes(df)
+    if detected_cadence is None:
+        return True, detected_cadence
+    return detected_cadence == int(expected_cadence_minutes), detected_cadence
+
+
 def _get_file_signature(data_file):
     try:
         stat_result = os.stat(data_file)
@@ -260,6 +287,10 @@ def _load_data_file_cached(data_file, modified_time, file_size):
     for column in ("UpVol", "DownVol"):
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
+
+    cadence_ok, detected_cadence = _is_compatible_cadence(df, EXPECTED_MARKET_CADENCE_MINUTES)
+    df.attrs["detected_cadence_minutes"] = detected_cadence
+    df.attrs["cadence_compatible"] = cadence_ok
     return df
 
 
@@ -273,30 +304,58 @@ def _load_data_file(data_file):
 
 
 def load_data(selected_date, files_by_date, legacy_path):
+    warnings = []
     try:
         data_file, resolved_date = _resolve_data_file(selected_date, files_by_date, legacy_path)
         if not data_file:
-            return None, None
+            return None, None, warnings
         df = _load_data_file(data_file)
-        return df, resolved_date
+        cadence_ok = bool(df.attrs.get("cadence_compatible", True))
+        detected_cadence = df.attrs.get("detected_cadence_minutes")
+        if not cadence_ok:
+            warning = (
+                f"Skipping {os.path.basename(data_file)}: detected {detected_cadence}m cadence, "
+                f"dashboard currently supports {EXPECTED_MARKET_CADENCE_MINUTES}m cadence only."
+            )
+            warnings.append(warning)
+            logging.warning(warning)
+            return None, resolved_date, warnings
+        return df, resolved_date, warnings
     except FileNotFoundError:
-        return None, None
+        return None, None, warnings
     except Exception as e:  # Catch other potential errors during loading/parsing
         st.error(f"Error loading data: {e}")
-        return None, None
+        return None, None, warnings
 
 
 @st.cache_data(show_spinner=False)
 def _load_all_data_cached(file_signatures):
     data_frames = []
+    warnings = []
     for data_file, modified_time, file_size in file_signatures:
         try:
-            data_frames.append(_load_data_file_cached(data_file, modified_time, file_size))
+            loaded_df = _load_data_file_cached(data_file, modified_time, file_size)
         except (KeyError, ValueError) as exc:
-            logging.warning("Skipping data file %s: %s", data_file, exc)
+            warning = f"Skipping data file {data_file}: {exc}"
+            logging.warning(warning)
+            warnings.append(warning)
+            continue
+
+        cadence_ok = bool(loaded_df.attrs.get("cadence_compatible", True))
+        detected_cadence = loaded_df.attrs.get("detected_cadence_minutes")
+        if not cadence_ok:
+            warning = (
+                f"Skipping {os.path.basename(data_file)}: detected {detected_cadence}m cadence, "
+                f"dashboard currently supports {EXPECTED_MARKET_CADENCE_MINUTES}m cadence only."
+            )
+            logging.warning(warning)
+            warnings.append(warning)
+            continue
+
+        data_frames.append(loaded_df)
     if not data_frames:
-        return None
-    return pd.concat(data_frames, ignore_index=True)
+        return None, tuple(warnings)
+    return pd.concat(data_frames, ignore_index=True), tuple(warnings)
 
 
 def load_all_data(files_by_date, legacy_path):
@@ -310,11 +369,11 @@ def load_all_data(files_by_date, legacy_path):
         if signature is not None:
             file_signatures.append(signature)
     if not file_signatures:
-        return None
-    df = _load_all_data_cached(tuple(file_signatures))
+        return None, []
+    df, warnings = _load_all_data_cached(tuple(file_signatures))
     if df is not None:
         df.attrs["data_signature"] = tuple(file_signatures)
-    return df
+    return df, list(warnings)
 
 
 def _ensure_second_entry_cache_dir():
@@ -2512,9 +2571,9 @@ def render_dashboard():
     status_container = st.status("Loading dashboard data…", expanded=True)
     progress_bar = progress_container.progress(0, text="Loading data files…")
 
-    df, resolved_date = load_data(selected_date, files_by_date, legacy_path)
+    df, resolved_date, load_warnings = load_data(selected_date, files_by_date, legacy_path)
     progress_bar.progress(0.25, text="Loaded selected data file.")
-    history_df = load_all_data(files_by_date, legacy_path)
+    history_df, history_warnings = load_all_data(files_by_date, legacy_path)
     progress_bar.progress(0.45, text="Loaded historical data.")
     if history_df is None or history_df.empty:
         history_df = df
@@ -2523,6 +2582,12 @@ def render_dashboard():
             f"No data file found for {selected_date.strftime('%Y-%m-%d')}. "
             f"Showing {resolved_date.strftime('%Y-%m-%d')} instead."
         )
+
+    all_load_warnings = list(load_warnings) + list(history_warnings)
+    if all_load_warnings:
+        unique_warnings = list(dict.fromkeys(all_load_warnings))
+        for warning in unique_warnings:
+            st.warning(warning)
 
     if df is not None and not df.empty:
         time_column = "Timestamp" if time_axis == "Polymarket Time (ET)" else "Timestamp_UK"
