@@ -103,6 +103,32 @@ def run_autotune(
     return best_result
 
 
+
+
+def count_valid_parameter_combinations(
+    minutes_range,
+    entry_threshold_range,
+    hold_until_close_threshold_range,
+    second_entry_threshold_range,
+    modes,
+):
+    minutes_values = list(minutes_range)
+    entry_values = list(entry_threshold_range)
+    hold_values = list(hold_until_close_threshold_range)
+    second_entry_values = list(second_entry_threshold_range)
+    mode_values = list(modes)
+    count = 0
+    for entry_value in entry_values:
+        valid_hold_values = [hold_value for hold_value in hold_values if hold_value >= entry_value]
+        count += (
+            len(minutes_values)
+            * len(valid_hold_values)
+            * len(second_entry_values)
+            * len(mode_values)
+        )
+    return count
+
+
 def run_coarse_autotune(
     df,
     time_column,
@@ -124,12 +150,12 @@ def run_coarse_autotune(
     hold_values = list(hold_until_close_threshold_range)
     second_entry_values = list(second_entry_threshold_range)
     mode_values = list(modes)
-    total_steps = (
-        len(minutes_values)
-        * len(entry_values)
-        * len(hold_values)
-        * len(second_entry_values)
-        * len(mode_values)
+    total_steps = count_valid_parameter_combinations(
+        minutes_values,
+        entry_values,
+        hold_values,
+        second_entry_values,
+        mode_values,
     )
     completed_steps = 0
 

@@ -165,8 +165,8 @@ This script will analyze historical data for arbitrage opportunities and report 
 
 ### Dashboard Optimization Workflow
 - Use **Run Optimization** to execute a streamlined two-phase search focused on **Max Expected P/L**.
-- **Phase 1 (fast scout)** tests base entries with second-entry disabled.
-- **Phase 2 (refine)** automatically tunes second-entry settings only for the best phase-1 candidates.
+- **Phase 1 (fast scout)** tests only `(minutes_after_open, entry_threshold)` with second-entry forced `off` and hold fixed to a single baseline value.
+- **Phase 2 (refine)** takes the best phase-1 `(minutes_after_open, entry_threshold)` pairs and sweeps hold range + second-entry threshold + second-entry mode.
 - Set **Minimum optimization samples** in the left sidebar (default `200`). Candidates below the threshold are ignored.
 - For 5-minute cadence, optimization now supports **5-second increments** to trial finer entry timing.
 - Keep optimization settings compact by default and use **Advanced optimization settings** only when needed.
