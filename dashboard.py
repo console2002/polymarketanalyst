@@ -27,6 +27,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) or os.getcwd()
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
 EXPECTED_MARKET_CADENCE_MINUTES = 15
+CADENCE_OPTIONS = {
+    "5min": 5,
+    "15min": 15,
+}
 CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache", "second_entry")
 CACHE_SCHEMA_VERSION = 2
 COARSE_AUTOTUNE_COLUMNS = [
@@ -71,19 +75,24 @@ def _parse_date_from_filename(filename):
     return None
 
 
-def _get_available_data_files():
+def _get_available_data_files_for_cadence(cadence_key):
     files_by_date = {}
-    for filename in os.listdir(SCRIPT_DIR):
-        if not filename.endswith(".csv"):
-            continue
-        if filename.startswith("coarse_autotune_"):
-            continue
-        file_date = _parse_date_from_filename(filename)
-        if file_date:
-            files_by_date[file_date] = os.path.join(SCRIPT_DIR, filename)
-    legacy_path = os.path.join(SCRIPT_DIR, "market_data.csv")
-    if not os.path.exists(legacy_path):
-        legacy_path = None
+    cadence_dir = os.path.join(SCRIPT_DIR, "data", cadence_key)
+    if os.path.isdir(cadence_dir):
+        for filename in os.listdir(cadence_dir):
+            if not filename.endswith(".csv"):
+                continue
+            if filename.startswith("coarse_autotune_"):
+                continue
+            file_date = _parse_date_from_filename(filename)
+            if file_date:
+                files_by_date[file_date] = os.path.join(cadence_dir, filename)
+
+    legacy_path = None
+    if not files_by_date:
+        legacy_path = os.path.join(SCRIPT_DIR, "market_data.csv")
+        if not os.path.exists(legacy_path):
+            legacy_path = None
     return files_by_date, legacy_path
 
 
@@ -259,7 +268,7 @@ def _get_file_signature(data_file):
 
 
 @st.cache_data(show_spinner=False)
-def _load_data_file_cached(data_file, modified_time, file_size):
+def _load_data_file_cached(data_file, modified_time, file_size, expected_cadence_minutes):
     df = pd.read_csv(data_file)
     if "timestamp_et" in df.columns:
         df = _reshape_new_style_csv(df)
@@ -288,34 +297,34 @@ def _load_data_file_cached(data_file, modified_time, file_size):
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
 
-    cadence_ok, detected_cadence = _is_compatible_cadence(df, EXPECTED_MARKET_CADENCE_MINUTES)
+    cadence_ok, detected_cadence = _is_compatible_cadence(df, expected_cadence_minutes)
     df.attrs["detected_cadence_minutes"] = detected_cadence
     df.attrs["cadence_compatible"] = cadence_ok
     return df
 
 
-def _load_data_file(data_file):
+def _load_data_file(data_file, expected_cadence_minutes):
     signature = _get_file_signature(data_file)
     if signature is None:
         raise FileNotFoundError(data_file)
-    df = _load_data_file_cached(*signature)
+    df = _load_data_file_cached(*signature, expected_cadence_minutes)
     df.attrs["data_signature"] = signature
     return df
 
 
-def load_data(selected_date, files_by_date, legacy_path):
+def load_data(selected_date, files_by_date, legacy_path, expected_cadence_minutes):
     warnings = []
     try:
         data_file, resolved_date = _resolve_data_file(selected_date, files_by_date, legacy_path)
         if not data_file:
             return None, None, warnings
-        df = _load_data_file(data_file)
+        df = _load_data_file(data_file, expected_cadence_minutes)
         cadence_ok = bool(df.attrs.get("cadence_compatible", True))
         detected_cadence = df.attrs.get("detected_cadence_minutes")
         if not cadence_ok:
             warning = (
                 f"Skipping {os.path.basename(data_file)}: detected {detected_cadence}m cadence, "
-                f"dashboard currently supports {EXPECTED_MARKET_CADENCE_MINUTES}m cadence only."
+                f"dashboard currently supports {expected_cadence_minutes}m cadence only."
             )
             warnings.append(warning)
             logging.warning(warning)
@@ -329,12 +338,17 @@ def load_data(selected_date, files_by_date, legacy_path):
 
 
 @st.cache_data(show_spinner=False)
-def _load_all_data_cached(file_signatures):
+def _load_all_data_cached(file_signatures, expected_cadence_minutes):
     data_frames = []
     warnings = []
     for data_file, modified_time, file_size in file_signatures:
         try:
-            loaded_df = _load_data_file_cached(data_file, modified_time, file_size)
+            loaded_df = _load_data_file_cached(
+                data_file,
+                modified_time,
+                file_size,
+                expected_cadence_minutes,
+            )
         except (KeyError, ValueError) as exc:
             warning = f"Skipping data file {data_file}: {exc}"
             logging.warning(warning)
@@ -346,7 +360,7 @@ def _load_all_data_cached(file_signatures):
         if not cadence_ok:
             warning = (
                 f"Skipping {os.path.basename(data_file)}: detected {detected_cadence}m cadence, "
-                f"dashboard currently supports {EXPECTED_MARKET_CADENCE_MINUTES}m cadence only."
+                f"dashboard currently supports {expected_cadence_minutes}m cadence only."
             )
             logging.warning(warning)
             warnings.append(warning)
@@ -358,7 +372,7 @@ def _load_all_data_cached(file_signatures):
     return pd.concat(data_frames, ignore_index=True), tuple(warnings)
 
 
-def load_all_data(files_by_date, legacy_path):
+def load_all_data(files_by_date, legacy_path, expected_cadence_minutes):
     file_signatures = []
     for _, data_file in sorted(files_by_date.items()):
         signature = _get_file_signature(data_file)
@@ -370,7 +384,7 @@ def load_all_data(files_by_date, legacy_path):
             file_signatures.append(signature)
     if not file_signatures:
         return None, []
-    df, warnings = _load_all_data_cached(tuple(file_signatures))
+    df, warnings = _load_all_data_cached(tuple(file_signatures), expected_cadence_minutes)
     if df is not None:
         df.attrs["data_signature"] = tuple(file_signatures)
     return df, list(warnings)
@@ -483,13 +497,6 @@ def _prune_second_entry_cache_dir(keep_paths=None, max_entries=5):
             os.remove(cache_path)
         except OSError:
             continue
-
-# Top-row controls
-files_by_date, legacy_path = _get_available_data_files()
-available_dates = sorted(files_by_date)
-latest_available_date = max(available_dates) if available_dates else None
-min_available_date = min(available_dates) if available_dates else None
-
 
 def _resample_market_data(df, time_column, interval):
     if df.empty or not interval or interval == "all":
@@ -2553,6 +2560,18 @@ def render_second_entry_summary(summary_state):
     st.dataframe(metrics_table, width="stretch")
 
 def render_dashboard():
+    cadence_key = st.sidebar.selectbox(
+        "Data cadence",
+        options=tuple(CADENCE_OPTIONS.keys()),
+        index=tuple(CADENCE_OPTIONS.values()).index(EXPECTED_MARKET_CADENCE_MINUTES),
+        help="Choose which cadence folder to load dated CSV files from.",
+    )
+    expected_cadence_minutes = CADENCE_OPTIONS[cadence_key]
+    files_by_date, legacy_path = _get_available_data_files_for_cadence(cadence_key)
+    available_dates = sorted(files_by_date)
+    latest_available_date = max(available_dates) if available_dates else None
+    min_available_date = min(available_dates) if available_dates else None
+
     if available_dates:
         selected_date = st.sidebar.date_input(
             "Data date",
@@ -2563,7 +2582,7 @@ def render_dashboard():
         )
     else:
         selected_date = None
-        st.sidebar.caption("No dated CSV files found; using legacy data file if available.")
+        st.sidebar.caption("No dated CSV files found for selected cadence; using legacy data file if available.")
 
     jump_container = st.sidebar.container()
 
@@ -2571,9 +2590,13 @@ def render_dashboard():
     status_container = st.status("Loading dashboard data…", expanded=True)
     progress_bar = progress_container.progress(0, text="Loading data files…")
 
-    df, resolved_date, load_warnings = load_data(selected_date, files_by_date, legacy_path)
+    df, resolved_date, load_warnings = load_data(
+        selected_date, files_by_date, legacy_path, expected_cadence_minutes
+    )
     progress_bar.progress(0.25, text="Loaded selected data file.")
-    history_df, history_warnings = load_all_data(files_by_date, legacy_path)
+    history_df, history_warnings = load_all_data(
+        files_by_date, legacy_path, expected_cadence_minutes
+    )
     progress_bar.progress(0.45, text="Loaded historical data.")
     if history_df is None or history_df.empty:
         history_df = df
