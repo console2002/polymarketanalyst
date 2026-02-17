@@ -1,6 +1,6 @@
 # Polymarket BTC Monitor
 
-A Python-based tool to monitor **Polymarket's Bitcoin (BTC) Up/Down prediction markets for both 5-minute and 15-minute windows**. Features real-time data logging and an interactive dashboard for analyzing market behavior and identifying potential opportunities.
+A Python-based tool to monitor **Polymarket's Bitcoin (BTC) Up/Down prediction markets for both 5-minute and 15-minute windows**. It provides real-time logging, profile-aware storage, and interactive visualization for both runtime profiles (`btc_5m` and `btc_15m`).
 
 ## Quickstart (Windows)
 
@@ -17,7 +17,7 @@ cd /d D:\GitHub\polymarketanalyst
 .\.venv\Scripts\activate
 ```
 
-### 3) Start the logger
+### 3) Start the logger (choose a market profile)
 
 ```bat
 python data_logger.py --ui-stream --market-type btc_15m
@@ -51,9 +51,9 @@ If you see a Windows “file in use” error, close any previous Streamlit proce
 Recent updates have brought significant improvements to both the backtesting capabilities and the data logging service, enhancing overall analysis and strategy development.
 
 ### Data Collection
-- **Automated Market Detection**: Supports currently active BTC Up/Down markets for both 5-minute (`btc_5m`) and 15-minute (`btc_15m`) profiles
+- **Automated Market Detection**: Supports currently active BTC Up/Down markets for both 5-minute (`btc_5m`) and 15-minute (`btc_15m`) profiles.
 - **Real-time Data Logging**: Continuously fetches and logs market data.
-- **CSV Storage**: Historical data stored in daily CSV files (one per day) for analysis.
+- **CSV Storage by Profile**: Writes daily CSV files to `data/5min/DDMMYYYY.csv` and `data/15min/DDMMYYYY.csv`.
 
 ### Interactive Dashboard
 - **Live Auto-Refresh**: Automatically updates periodically (every second) to ensure the latest data is displayed.
@@ -116,7 +116,12 @@ or
 .\.venv\Scripts\python.exe -m streamlit run logger_gui.py
 ```
 
-This will continuously fetch market data and save it to daily CSV files (one per day, named `DDMMYYYY.csv`) in `data/15min/` or `data/5min/` depending on `--market-type`. The GUI will open in your browser at `http://localhost:8501`.
+This will continuously fetch market data and save it to daily CSV files (one per day, named `DDMMYYYY.csv`) in profile-specific folders:
+
+- `data/15min/DDMMYYYY.csv` when `--market-type btc_15m`
+- `data/5min/DDMMYYYY.csv` when `--market-type btc_5m`
+
+The GUI will open in your browser at `http://localhost:8501`.
 
 #### CLI start commands (explicit)
 
@@ -189,9 +194,13 @@ The logger writes to one CSV file per day using the US/Eastern date (format `DDM
 - 5-minute market rotation path: `data/5min/DDMMYYYY.csv`
 
 ## Default market selection
-The logger uses the **default market profile `btc_15m`** when `--market-type` is omitted for backward-compatible behavior. In this mode it tracks the contract that expires at the next profile window boundary (15m by default).
+If you do not provide `--market-type`, the logger starts with the **default profile `btc_15m`** (backward-compatible behavior).
 
-To run a different window, pass `--market-type btc_5m` (or explicitly keep `--market-type btc_15m`). The GUI mirrors the logger's active feed and auto-advances for that profile; you can also change GUI display filters in the sidebar without changing logger ingestion (restart the logger to switch feeds).
+- Default behavior (implicit): `python data_logger.py --ui-stream`
+- Override to 15-minute explicitly: `python data_logger.py --ui-stream --market-type btc_15m`
+- Override to 5-minute explicitly: `python data_logger.py --ui-stream --market-type btc_5m`
+
+The selected profile controls which active contract window is tracked and where files are written (`data/15min/` vs `data/5min/`). The GUI mirrors the logger's active feed; changing GUI filters does not change logger ingestion, so restart the logger to switch runtime profiles.
 
 ## Migration note
 Older versions wrote daily CSV files at the repository root (for example, `24032025.csv`). Current versions store files under market-type folders:
