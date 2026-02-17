@@ -86,9 +86,9 @@ def _get_cadence_autotune_config(cadence_key):
             "minutes_display_label": "{value} min",
             "seconds_display_label": "{value} sec",
             "coarse_entry_step": 0.05,
-            "coarse_entry_bounds": (0.60, 0.80),
+            "coarse_entry_bounds": (0.52, 0.80),
             "coarse_hold_step": 0.05,
-            "coarse_hold_bounds": (0.65, 0.85),
+            "coarse_hold_bounds": (0.52, 0.85),
             "coarse_second_entry_step": 0.05,
             "coarse_second_entry_bounds": (0.40, 0.80),
         }
