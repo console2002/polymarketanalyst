@@ -62,3 +62,26 @@ def test_resolve_market_by_slug_malformed_clob_token_ids(monkeypatch):
 
     assert result is None
     assert "gamma_slug_invalid_clob_token_ids" in err
+
+
+def test_market_window_from_slug_parses_dynamic_minutes():
+    start, end = fcp._market_window_from_slug("btc-updown-5m-1704067200")
+
+    assert start == datetime.datetime.fromtimestamp(1704067200, tz=datetime.timezone.utc)
+    assert end == start + datetime.timedelta(minutes=5)
+
+
+def test_fetch_polymarket_data_struct_threads_profile_key(monkeypatch):
+    seen = {}
+
+    def fake_resolve_current_market(profile_key=None):
+        seen["profile_key"] = profile_key
+        return {"slug": "x"}, None
+
+    monkeypatch.setattr(fcp, "resolve_current_market", fake_resolve_current_market)
+
+    result, err = fcp.fetch_polymarket_data_struct(profile_key="btc_5m")
+
+    assert err is None
+    assert result["slug"] == "x"
+    assert seen["profile_key"] == "btc_5m"
