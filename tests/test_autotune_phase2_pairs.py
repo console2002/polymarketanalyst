@@ -6,20 +6,16 @@ from autotune import (
 )
 
 
-def test_count_valid_parameter_combinations_for_pairs_counts_only_valid_holds():
+def test_count_valid_parameter_combinations_for_pairs_counts_cartesian_product():
     pair_values = [(5, 0.6), (7, 0.7)]
-    hold_values = [0.55, 0.6, 0.7]
 
     count = count_valid_parameter_combinations_for_pairs(
         pair_values,
-        hold_values,
         [0.5, 0.6],
         ["additive", "sole"],
     )
 
-    # (5,0.6) => 2 valid holds (0.6, 0.7), (7,0.7) => 1 valid hold (0.7)
-    # total = (2 + 1) * 2 second-entry thresholds * 2 modes = 12
-    assert count == 12
+    assert count == len(pair_values) * 2 * 2
 
 
 def test_run_coarse_autotune_for_pairs_never_scores_non_shortlisted_pairs():
@@ -41,7 +37,7 @@ def test_run_coarse_autotune_for_pairs_never_scores_non_shortlisted_pairs():
         "timestamp",
         calculate_metrics,
         minutes_entry_pairs=shortlisted_pairs,
-        hold_until_close_threshold_range=[0.6, 0.7],
+        hold_until_close_threshold=1.0,
         second_entry_threshold_range=[0.5],
         modes=["additive"],
     )
@@ -76,13 +72,12 @@ def test_run_coarse_autotune_for_pairs_progress_tracks_true_candidate_count():
         "timestamp",
         calculate_metrics,
         minutes_entry_pairs=[(5.0, 0.65)],
-        hold_until_close_threshold_range=[0.6, 0.65, 0.7],
+        hold_until_close_threshold=1.0,
         second_entry_threshold_range=[0.5, 0.55],
         modes=["additive", "sole"],
         progress_callback=progress_callback,
     )
 
-    # hold=0.6 is invalid and should not be counted in total/progress
-    # valid evaluations = 2 holds * 2 second-entry thresholds * 2 modes = 8
+    # valid evaluations = 1 pair * 2 second-entry thresholds * 2 modes = 4
     assert progress_events
-    assert progress_events[-1] == (8, 8)
+    assert progress_events[-1] == (4, 4)
