@@ -22,16 +22,14 @@ import streamlit as st
 import websockets
 
 from get_current_markets import get_available_market_urls, get_current_market_urls
+from market_profiles import default_market_profile_key
 
 DEFAULT_WS_URL = "ws://127.0.0.1:8765"
 LAUNCH_LOG_MAX_LINES = 20
 STREAM_INACTIVE_THRESHOLD_SECONDS = 20
 LOGGER_PID_FILE = os.path.join(os.path.dirname(__file__), "data_logger_ui.pid")
 _LOGGER_PROCESS = None
-MARKET_TYPE_OPTIONS = {
-    "15m": "btc_15m",
-    "5m": "btc_5m",
-}
+MARKET_TYPE_OPTIONS = ["btc_15m", "btc_5m"]
 
 
 def _listener_worker(url, out_queue, stop_event):
@@ -402,13 +400,18 @@ st.sidebar.caption(
     "Read-only consumer. Updates are best-effort and may skip under load to keep the logger fast."
 )
 ws_url = st.sidebar.text_input("WebSocket URL", value=DEFAULT_WS_URL)
-selected_market_type_label = st.sidebar.selectbox(
-    "Market cadence",
-    options=list(MARKET_TYPE_OPTIONS.keys()),
-    index=0,
-    help="Select which market cadence the GUI should display and offer for logger startup.",
+default_profile = default_market_profile_key()
+default_profile_index = (
+    MARKET_TYPE_OPTIONS.index(default_profile)
+    if default_profile in MARKET_TYPE_OPTIONS
+    else 0
 )
-selected_profile_key = MARKET_TYPE_OPTIONS[selected_market_type_label]
+selected_profile_key = st.sidebar.selectbox(
+    "Market type",
+    options=MARKET_TYPE_OPTIONS,
+    index=default_profile_index,
+    help="Select the profile used for market lists and logger startup arguments.",
+)
 scheme, host, port = _parse_ws_target(ws_url)
 logger_proc = _get_logger_process()
 logger_running = logger_proc is not None
@@ -540,8 +543,8 @@ buffer_size = st.sidebar.slider(
 )
 st.session_state.buffer_size = buffer_size
 st.sidebar.subheader("Market Selection")
-market_options = get_available_market_urls(market_type=selected_market_type_label)
-current_market = get_current_market_urls(market_type=selected_market_type_label)
+market_options = get_available_market_urls(profile_key=selected_profile_key)
+current_market = get_current_market_urls(profile_key=selected_profile_key)
 market_by_url = {market["polymarket"]: market for market in market_options}
 option_urls = list(market_by_url.keys())
 current_url = current_market["polymarket"]
@@ -549,7 +552,10 @@ default_index = option_urls.index(current_url) if current_url in option_urls els
 override_market = st.sidebar.checkbox(
     "Override auto market",
     value=False,
-    help="Overrides the GUI display only. The logger remains unchanged unless restarted.",
+    help=(
+        "Overrides only the GUI display market. Logger feed/profile remain unchanged "
+        "until you restart the logger."
+    ),
 )
 selected_url = st.sidebar.selectbox(
     "Available markets",
@@ -563,11 +569,11 @@ if override_market:
     selected_market = market_by_url[selected_url]
     if selected_url != current_url:
         st.sidebar.info(
-            "Selection affects the GUI display only. Restart the logger to switch feeds."
+            "Display override affects GUI only. Restart logger to switch active feed/profile."
         )
 else:
     selected_market = current_market
-    st.sidebar.caption(f"Auto-advance enabled (next {selected_market_type_label} market).")
+    st.sidebar.caption(f"Auto-advance enabled (next {selected_profile_key} market).")
 
 _ensure_listener(ws_url)
 _drain_messages()
@@ -595,7 +601,7 @@ else:
 
 st.title("Live Logger Feed")
 st.caption(f"Logger status: {status_label}")
-st.caption(f"GUI Market [{selected_market.get('cadence_label', selected_market_type_label)}]: {selected_market['polymarket']}")
+st.caption(f"GUI Market [{selected_market.get('cadence_label', selected_profile_key)}]: {selected_market['polymarket']}")
 if last_update:
     st.caption(f"Last update (UTC): {last_update}")
 else:
