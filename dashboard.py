@@ -49,6 +49,49 @@ COARSE_AUTOTUNE_COLUMNS = [
 ]
 
 
+def _get_cadence_autotune_config(cadence_key):
+    base_config = {
+        "15min": {
+            "market_window_minutes": 15,
+            "minutes_after_open_min": 5,
+            "minutes_after_open_max": 12,
+            "minutes_after_open_default": 5,
+            "minutes_after_open_step": 1,
+            "coarse_minutes_min": 5,
+            "coarse_minutes_max": 12,
+            "coarse_minutes_default": (5, 12),
+            "coarse_minutes_step": 2,
+        },
+        "5min": {
+            "market_window_minutes": 5,
+            "minutes_after_open_min": 1,
+            "minutes_after_open_max": 4,
+            "minutes_after_open_default": 2,
+            "minutes_after_open_step": 1,
+            "coarse_minutes_min": 1,
+            "coarse_minutes_max": 4,
+            "coarse_minutes_default": (1, 4),
+            "coarse_minutes_step": 1,
+        },
+    }
+    config = base_config.get(cadence_key, base_config[DEFAULT_CADENCE_KEY]).copy()
+    config.update(
+        {
+            "minutes_display_format": "%d",
+            "seconds_display_format": "%d",
+            "minutes_display_label": "{value} min",
+            "seconds_display_label": "{value} sec",
+            "coarse_entry_step": 0.05,
+            "coarse_entry_bounds": (0.60, 0.80),
+            "coarse_hold_step": 0.05,
+            "coarse_hold_bounds": (0.65, 0.85),
+            "coarse_second_entry_step": 0.05,
+            "coarse_second_entry_bounds": (0.40, 0.80),
+        }
+    )
+    return config
+
+
 def add_vline_all_rows(fig, x, **kwargs):
     grid_ref = getattr(fig, "_grid_ref", None)
     row_count = len(grid_ref) if grid_ref else 1
@@ -115,13 +158,6 @@ lookback_period = st.sidebar.number_input(
     value=1,
     step=1,
     help="Number of markets to display in the window, including the current one.",
-)
-minutes_after_open = st.sidebar.number_input(
-    "Minutes after open",
-    min_value=1,
-    max_value=60,
-    value=5,
-    step=1,
 )
 entry_threshold = st.sidebar.number_input(
     "Entry threshold",
@@ -1923,6 +1959,7 @@ def render_strike_rate_section(
     history_time_column,
     second_entry_mode,
     second_entry_threshold,
+    cadence_autotune_config,
     precomputed_groups=None,
     precomputed_target_order=None,
 ):
@@ -2023,39 +2060,58 @@ def render_strike_rate_section(
         coarse_autotune_objective_label,
         "edge",
     )
+    coarse_minutes_min = cadence_autotune_config["coarse_minutes_min"]
+    coarse_minutes_max = cadence_autotune_config["coarse_minutes_max"]
+    coarse_minutes_default = cadence_autotune_config["coarse_minutes_default"]
+    coarse_minutes_step = cadence_autotune_config["coarse_minutes_step"]
+    coarse_entry_bounds = cadence_autotune_config["coarse_entry_bounds"]
+    coarse_hold_bounds = cadence_autotune_config["coarse_hold_bounds"]
+    coarse_second_entry_bounds = cadence_autotune_config["coarse_second_entry_bounds"]
+    coarse_entry_step = cadence_autotune_config["coarse_entry_step"]
+    coarse_hold_step = cadence_autotune_config["coarse_hold_step"]
+    coarse_second_entry_step = cadence_autotune_config["coarse_second_entry_step"]
+    minutes_display_format = cadence_autotune_config["minutes_display_format"]
+
     with st.expander("Coarse autotune settings", expanded=False):
         coarse_minutes_range = st.slider(
             "Minutes after open range",
-            min_value=5,
-            max_value=12,
-            value=(5, 12),
-            step=2,
+            min_value=coarse_minutes_min,
+            max_value=coarse_minutes_max,
+            value=coarse_minutes_default,
+            step=coarse_minutes_step,
+            format=minutes_display_format,
             key="coarse_minutes_after_open_range",
+        )
+        st.caption(
+            "Market window cadence: "
+            + cadence_autotune_config["minutes_display_label"].format(
+                value=cadence_autotune_config["market_window_minutes"]
+            )
         )
         coarse_entry_range = st.slider(
             "Entry threshold range",
-            min_value=0.60,
-            max_value=0.80,
-            value=(0.60, 0.80),
-            step=0.05,
+            min_value=coarse_entry_bounds[0],
+            max_value=coarse_entry_bounds[1],
+            value=coarse_entry_bounds,
+            step=coarse_entry_step,
             format="%.2f",
             key="coarse_entry_threshold_range",
         )
         coarse_hold_range = st.slider(
             "Hold until close threshold range",
-            min_value=0.65,
-            max_value=0.85,
-            value=(0.65, 0.85),
-            step=0.05,
+            min_value=coarse_hold_bounds[0],
+            max_value=coarse_hold_bounds[1],
+            value=coarse_hold_bounds,
+            step=coarse_hold_step,
             format="%.2f",
             key="coarse_hold_threshold_range",
         )
         coarse_second_entry_threshold_range = st.slider(
             "Second entry threshold range",
-            min_value=0.40,
-            max_value=0.80,
-            value=(0.40, 0.80),
-            step=0.05,
+            min_value=coarse_second_entry_bounds[0],
+            max_value=coarse_second_entry_bounds[1],
+            value=coarse_second_entry_bounds,
+            step=coarse_second_entry_step,
             format="%.2f",
             key="coarse_second_entry_threshold_range",
         )
@@ -2247,22 +2303,22 @@ def render_strike_rate_section(
                     minutes_range=range(
                         coarse_minutes_range[0],
                         coarse_minutes_range[1] + 1,
-                        2,
+                        coarse_minutes_step,
                     ),
                     entry_threshold_range=np.arange(
                         coarse_entry_range[0],
                         coarse_entry_range[1] + 0.001,
-                        0.05,
+                        coarse_entry_step,
                     ),
                     hold_until_close_threshold_range=np.arange(
                         coarse_hold_range[0],
                         coarse_hold_range[1] + 0.001,
-                        0.05,
+                        coarse_hold_step,
                     ),
                     second_entry_threshold_range=np.arange(
                         coarse_second_entry_threshold_range[0],
                         coarse_second_entry_threshold_range[1] + 0.001,
-                        0.05,
+                        coarse_second_entry_step,
                     ),
                     modes=[_normalize_second_entry_mode(mode) for mode in coarse_second_entry_modes],
                     progress_callback=_coarse_progress_callback,
@@ -2580,9 +2636,25 @@ def render_dashboard():
         help="Choose which cadence folder to load dated CSV files from.",
     )
     expected_cadence_minutes = CADENCE_OPTIONS[cadence_key]
+    cadence_autotune_config = _get_cadence_autotune_config(cadence_key)
     active_cadence_dir = os.path.join(SCRIPT_DIR, "data", cadence_key)
     st.sidebar.caption(f"Active source: `{active_cadence_dir}`")
     selected_cadence_minutes = CADENCE_OPTIONS[cadence_key]
+
+    minutes_after_open = st.sidebar.number_input(
+        "Minutes after open",
+        min_value=cadence_autotune_config["minutes_after_open_min"],
+        max_value=cadence_autotune_config["minutes_after_open_max"],
+        value=cadence_autotune_config["minutes_after_open_default"],
+        step=cadence_autotune_config["minutes_after_open_step"],
+        format=cadence_autotune_config["minutes_display_format"],
+    )
+    st.sidebar.caption(
+        "Market window: "
+        + cadence_autotune_config["minutes_display_label"].format(
+            value=cadence_autotune_config["market_window_minutes"]
+        )
+    )
 
     selected_date_state_key = f"selected_date_{cadence_key}"
     files_by_date, legacy_path = _get_available_data_files_for_cadence(cadence_key)
@@ -2715,6 +2787,7 @@ def render_dashboard():
                 history_time_column,
                 second_entry_mode,
                 second_entry_threshold,
+                cadence_autotune_config,
                 precomputed_groups=history_market_groups,
                 precomputed_target_order=history_target_order,
             )
