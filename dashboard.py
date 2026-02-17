@@ -18,7 +18,7 @@ from dashboard_metrics import (
     summarize_drawdowns,
     summarize_profit_loss,
 )
-from dashboard_processing import align_market_open, calculate_market_trade_records
+from dashboard_processing import MARKET_WINDOW_MINUTES, align_market_open, calculate_market_trade_records
 from second_entry_processing import calculate_market_trade_records_with_second_entry
 
 
@@ -473,6 +473,7 @@ def _build_second_entry_cache_key(
     hold_until_close_threshold,
     second_entry_threshold,
     second_entry_mode,
+    market_window_minutes,
 ):
     payload = {
         "schema_version": CACHE_SCHEMA_VERSION,
@@ -482,6 +483,7 @@ def _build_second_entry_cache_key(
         "hold_until_close_threshold": float(hold_until_close_threshold),
         "second_entry_threshold": float(second_entry_threshold),
         "second_entry_mode": str(second_entry_mode),
+        "market_window_minutes": int(market_window_minutes),
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -686,6 +688,7 @@ def _calculate_trade_records(
     hold_until_close_threshold,
     second_entry_mode,
     second_entry_threshold,
+    market_window_minutes=MARKET_WINDOW_MINUTES,
     target_order=None,
     precomputed_groups=None,
     precomputed_target_order=None,
@@ -699,6 +702,7 @@ def _calculate_trade_records(
         hold_until_close_threshold,
         second_entry_threshold,
         normalized_mode,
+        market_window_minutes,
     )
     cache_path = _get_second_entry_cache_path(cache_key)
     cached_records = _load_second_entry_cache(cache_path)
@@ -713,6 +717,7 @@ def _calculate_trade_records(
             entry_threshold,
             hold_until_close_threshold,
             TIME_FORMAT,
+            market_window_minutes=market_window_minutes,
             target_order=target_order,
             precomputed_groups=precomputed_groups,
             precomputed_target_order=precomputed_target_order,
@@ -728,6 +733,7 @@ def _calculate_trade_records(
             second_entry_threshold,
             normalized_mode,
             target_order=target_order,
+            market_window_minutes=market_window_minutes,
             precomputed_groups=precomputed_groups,
             precomputed_target_order=precomputed_target_order,
         )
@@ -745,6 +751,7 @@ def _get_cached_trade_records(
     second_entry_mode,
     second_entry_threshold,
     allow_compute,
+    market_window_minutes=MARKET_WINDOW_MINUTES,
     target_order=None,
     precomputed_groups=None,
     precomputed_target_order=None,
@@ -758,6 +765,7 @@ def _get_cached_trade_records(
         hold_until_close_threshold,
         second_entry_threshold,
         normalized_mode,
+        market_window_minutes,
     )
     cache_path = _get_second_entry_cache_path(cache_key)
     cached_records = _load_second_entry_cache(cache_path)
@@ -771,6 +779,7 @@ def _get_cached_trade_records(
         hold_until_close_threshold,
         normalized_mode,
         second_entry_threshold,
+        market_window_minutes=market_window_minutes,
         target_order=target_order,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
@@ -873,6 +882,7 @@ def _calculate_strike_rate_metrics(
     precomputed_groups=None,
     precomputed_target_order=None,
     return_dict=False,
+    market_window_minutes=MARKET_WINDOW_MINUTES,
 ):
     trade_records = _calculate_trade_records(
         df,
@@ -882,6 +892,7 @@ def _calculate_strike_rate_metrics(
         hold_until_close_threshold,
         second_entry_mode,
         second_entry_threshold,
+        market_window_minutes=market_window_minutes,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
     )
@@ -948,6 +959,7 @@ def _calculate_window_summary(
     second_entry_mode,
     second_entry_threshold,
     trade_value_usd,
+    market_window_minutes=MARKET_WINDOW_MINUTES,
 ):
     summary_rows = []
     loss_targets = []
@@ -959,6 +971,7 @@ def _calculate_window_summary(
         hold_until_close_threshold,
         second_entry_mode,
         second_entry_threshold,
+        market_window_minutes=market_window_minutes,
     )
 
     for record in trade_records:
@@ -1030,6 +1043,7 @@ def _find_latest_loss_target(
     second_entry_mode,
     second_entry_threshold,
     trade_value_usd,
+    market_window_minutes=MARKET_WINDOW_MINUTES,
 ):
     _, latest_loss_target = _calculate_window_summary(
         df,
@@ -1040,6 +1054,7 @@ def _find_latest_loss_target(
         second_entry_mode,
         second_entry_threshold,
         trade_value_usd,
+        market_window_minutes=market_window_minutes,
     )
     return latest_loss_target
 
@@ -1151,6 +1166,7 @@ def _update_strike_rate_state(
     second_entry_threshold,
     trade_value_usd,
     current_open,
+    market_window_minutes=MARKET_WINDOW_MINUTES,
     precomputed_groups=None,
     precomputed_target_order=None,
 ):
@@ -1187,6 +1203,7 @@ def _update_strike_rate_state(
             second_entry_threshold,
             trade_value_usd,
             history_segment="strike",
+            market_window_minutes=market_window_minutes,
             precomputed_groups=precomputed_groups,
             precomputed_target_order=precomputed_target_order,
         )
@@ -1200,6 +1217,7 @@ def _update_strike_rate_state(
             second_entry_threshold,
             trade_value_usd,
             history_segment="autotune",
+            market_window_minutes=market_window_minutes,
             precomputed_groups=precomputed_groups,
             precomputed_target_order=precomputed_target_order,
         )
@@ -1309,6 +1327,7 @@ def _update_window_summary_state(
             second_entry_mode,
             second_entry_threshold,
             trade_value_usd,
+            market_window_minutes=selected_cadence_minutes,
         )
         if latest_loss_target is not None:
             last_loss_target = st.session_state.window_summary_last_loss_target
@@ -1331,6 +1350,7 @@ def _update_window_summary_state(
             second_entry_mode,
             second_entry_threshold,
             trade_value_usd,
+            market_window_minutes=selected_cadence_minutes,
         )
         st.session_state.window_summary_rows = summary_rows
         st.session_state.window_summary_last_loss_target = latest_loss_target
@@ -1477,7 +1497,7 @@ def build_market_summary_table(df_window, latest, time_column, selected_cadence_
     latest_timestamp = df_window[time_column].max()
     market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
     market_start_time = market_rows[time_column].min()
-    market_open_time = align_market_open(market_start_time)
+    market_open_time = align_market_open(market_start_time, selected_cadence_minutes)
     if pd.isna(market_start_time):
         countdown_display = "N/A"
     else:
@@ -1609,6 +1629,7 @@ def render_probability_history(
         hold_until_close_threshold,
         second_entry_mode,
         second_entry_threshold,
+        market_window_minutes=selected_cadence_minutes,
         target_order=full_target_dt_order,
     )
     trade_record_map = {record["target_time_dt"]: record for record in trade_records}
@@ -1839,6 +1860,7 @@ def compute_summary_state(
         second_entry_threshold,
         trade_value_usd,
         current_open,
+        market_window_minutes=selected_cadence_minutes,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
     )
@@ -1895,6 +1917,7 @@ def compute_summary_state(
             hold_until_close_threshold,
             second_entry_mode,
             second_entry_threshold,
+            market_window_minutes=selected_cadence_minutes,
         )
         closed_trades = build_trade_pnl_records(profit_loss_trade_records, trade_value_usd)
         profit_loss_summary = summarize_profit_loss(
@@ -1931,6 +1954,7 @@ def compute_summary_state(
         second_entry_mode,
         second_entry_threshold,
         allow_compute=True,
+        market_window_minutes=selected_cadence_minutes,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
     )
@@ -1943,6 +1967,7 @@ def compute_summary_state(
         "off",
         second_entry_threshold,
         allow_compute=True,
+        market_window_minutes=selected_cadence_minutes,
         precomputed_groups=precomputed_groups,
         precomputed_target_order=precomputed_target_order,
     )
@@ -1970,6 +1995,7 @@ def render_strike_rate_section(
     second_entry_mode,
     second_entry_threshold,
     cadence_autotune_config,
+    selected_cadence_minutes,
     precomputed_groups=None,
     precomputed_target_order=None,
 ):
@@ -2226,6 +2252,7 @@ def render_strike_rate_section(
                     precomputed_groups=precomputed_groups,
                     precomputed_target_order=precomputed_target_order,
                     return_dict=True,
+                    market_window_minutes=selected_cadence_minutes,
                 )
 
             best_result = run_autotune(
@@ -2303,6 +2330,7 @@ def render_strike_rate_section(
                         precomputed_groups=precomputed_groups,
                         precomputed_target_order=precomputed_target_order,
                         return_dict=True,
+                        market_window_minutes=selected_cadence_minutes,
                     )
 
                 run_id = f"coarse_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -2760,7 +2788,7 @@ def render_dashboard():
         today_start_time = df[time_column].min()
         if pd.isna(today_start_time):
             today_start_time = None
-        current_open = align_market_open(history_latest_timestamp)
+        current_open = align_market_open(history_latest_timestamp, selected_cadence_minutes)
         history_market_groups, history_target_order = _build_market_groups(
             history_df,
             history_time_column,
@@ -2811,6 +2839,7 @@ def render_dashboard():
                 second_entry_mode,
                 second_entry_threshold,
                 cadence_autotune_config,
+                selected_cadence_minutes,
                 precomputed_groups=history_market_groups,
                 precomputed_target_order=history_target_order,
             )
