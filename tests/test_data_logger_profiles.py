@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import datetime
+import sys
 from pathlib import Path
 
 import pytz
@@ -112,6 +113,110 @@ def test_run_logger_rollover_uses_profile_duration(monkeypatch):
     asyncio.run(data_logger.run_logger(selected_profile_key="btc_5m", stop_event=stop_event))
 
     assert captured_start_times == [expiration - datetime.timedelta(minutes=5)]
+
+
+def test_run_logger_rollover_uses_profile_duration_for_15m(monkeypatch):
+    profile = get_market_profile("btc_15m")
+    now = datetime.datetime.now(pytz.utc)
+    expiration = now + datetime.timedelta(minutes=profile.window_minutes)
+    captured_start_times = []
+
+    stop_event = asyncio.Event()
+
+    class StubAggregator:
+        def __init__(self, market_info, profile, broadcaster=None):
+            self.market_info = market_info
+
+        async def monitor_no_updates(self):
+            await asyncio.sleep(3600)
+
+        async def handle_update(self, update):
+            return None
+
+    class StubWsLogger:
+        def __init__(self, market_info, on_price_update):
+            self.market_info = market_info
+
+        async def run(self):
+            return None
+
+        async def shutdown(self):
+            return None
+
+    def fake_resolve_current_market(profile_key=None, profile=None):
+        return ({"expiration_time_utc": expiration, "profile_key": profile_key}, None)
+
+    def fake_resolve_market_by_start_time(start_time_utc, profile_key=None, profile=None):
+        captured_start_times.append(start_time_utc)
+        stop_event.set()
+        return (None, "stop")
+
+    monkeypatch.setattr(data_logger, "PriceAggregator", StubAggregator)
+    monkeypatch.setattr(data_logger, "PolymarketWebsocketLogger", StubWsLogger)
+    monkeypatch.setattr(data_logger, "_resolve_current_market", fake_resolve_current_market)
+    monkeypatch.setattr(
+        data_logger,
+        "_resolve_market_by_start_time",
+        fake_resolve_market_by_start_time,
+    )
+    monkeypatch.setattr(data_logger, "_ensure_csv", lambda path: None)
+    monkeypatch.setattr(data_logger, "_get_data_file", lambda now_dt, profile: "x.csv")
+    monkeypatch.setattr(data_logger, "STATUS_CHECK_INTERVAL_SECONDS", 0)
+
+    asyncio.run(data_logger.run_logger(selected_profile_key="btc_15m", stop_event=stop_event))
+
+    assert captured_start_times == [expiration - datetime.timedelta(minutes=15)]
+
+
+def test_get_writer_creates_directory_before_write(tmp_path, monkeypatch):
+    profile = get_market_profile("btc_5m")
+    market_info = {"outcomes": ["up", "down"], "profile_key": profile.key}
+    aggregator = data_logger.PriceAggregator(market_info, profile)
+    target_csv = tmp_path / "nested" / "deeper" / "prices.csv"
+    observed = {"dir_exists_during_ensure": False}
+
+    def fake_ensure_csv(file_path):
+        parent = Path(file_path).parent
+        observed["dir_exists_during_ensure"] = parent.exists()
+        with open(file_path, "w", newline="") as handle:
+            csv.writer(handle).writerow(data_logger.CSV_HEADERS)
+
+    monkeypatch.setattr(data_logger, "_ensure_csv", fake_ensure_csv)
+
+    writer = aggregator._get_writer(str(target_csv))
+    writer.writerow(["sample"])
+
+    assert observed["dir_exists_during_ensure"]
+    assert target_csv.exists()
+    aggregator._current_file_handle.close()
+
+
+def test_main_parses_market_type_5m(monkeypatch):
+    captured = {}
+
+    async def fake_run_with_signals(selected_profile, broadcaster):
+        captured["selected_profile"] = selected_profile.key
+
+    monkeypatch.setattr(data_logger, "_run_with_signals", fake_run_with_signals)
+    monkeypatch.setattr(sys, "argv", ["data_logger.py", "--market-type", "btc_5m"])
+
+    data_logger.main()
+
+    assert captured["selected_profile"] == "btc_5m"
+
+
+def test_main_default_market_type_backwards_compat_15m(monkeypatch):
+    captured = {}
+
+    async def fake_run_with_signals(selected_profile, broadcaster):
+        captured["selected_profile"] = selected_profile.key
+
+    monkeypatch.setattr(data_logger, "_run_with_signals", fake_run_with_signals)
+    monkeypatch.setattr(sys, "argv", ["data_logger.py"])
+
+    data_logger.main()
+
+    assert captured["selected_profile"] == "btc_15m"
 
 
 def test_writer_reopens_on_et_day_change_with_profile_subdir(tmp_path, monkeypatch):
