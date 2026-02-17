@@ -1,8 +1,15 @@
 import datetime
 import pytz
 
+from market_profiles import default_market_profile_key, get_market_profile
+
 # Base URL for Polymarket events
 BASE_URL = "https://polymarket.com/event/"
+
+
+def _market_profile(profile_key=None):
+    selected_key = profile_key or default_market_profile_key()
+    return get_market_profile(selected_key)
 
 def generate_slug(target_time):
     """
@@ -29,32 +36,41 @@ def generate_slug(target_time):
     slug = f"bitcoin-up-or-down-{month}-{day}-{hour_int}{am_pm}-et"
     return slug
 
-def generate_15m_slug(target_time):
+def generate_profile_slug(target_time, profile_key=None):
     """
-    Generates the Polymarket event slug for a 15-minute market.
-    Format: btc-updown-15m-[TIMESTAMP]
+    Generates the Polymarket event slug for a configured market profile.
+    Format: <slug_prefix>-[TIMESTAMP]
     The timestamp is the market start time (Unix timestamp).
     """
+    profile = _market_profile(profile_key)
+
     # Ensure time is in UTC for timestamp calculation
     if target_time.tzinfo is None:
         target_time = pytz.utc.localize(target_time)
-    
-    timestamp = int(target_time.timestamp())
-    return f"btc-updown-15m-{timestamp}"
 
-def generate_market_url(target_time):
+    timestamp = int(target_time.timestamp())
+    return f"{profile.slug_prefix}-{timestamp}"
+
+
+def generate_15m_slug(target_time):
+    """Compatibility wrapper for legacy callers expecting 15-minute BTC slugs."""
+
+    return generate_profile_slug(target_time, profile_key="btc_15m")
+
+def generate_market_url(target_time, profile_key=None):
     """
     Generates the full Polymarket URL for a given datetime.
     Detects if it should be an hourly or 15-minute market based on minutes?
     Actually, let's switch entirely to 15m markets as requested.
     """
-    slug = generate_15m_slug(target_time)
+    slug = generate_profile_slug(target_time, profile_key=profile_key)
     return f"{BASE_URL}{slug}"
 
-def get_next_market_urls(num_hours=5):
+def get_next_market_urls(num_hours=5, profile_key=None):
     """
     Generates URLs for the next 'num_hours' 15-minute markets.
     """
+    profile = _market_profile(profile_key)
     urls = []
     now = datetime.datetime.now(pytz.utc)
     
@@ -64,28 +80,30 @@ def get_next_market_urls(num_hours=5):
     
     base_time = now.replace(second=0, microsecond=0)
     minutes = base_time.minute
-    remainder = minutes % 15
+    remainder = minutes % profile.window_minutes
     current_quarter = base_time - datetime.timedelta(minutes=remainder)
-    
-    for i in range(num_hours * 4): # Fetch enough for X hours
-        target_time = current_quarter + datetime.timedelta(minutes=15 * i)
-        urls.append(generate_market_url(target_time))
+
+    windows_per_hour = int(60 / profile.window_minutes)
+    for i in range(num_hours * windows_per_hour): # Fetch enough for X hours
+        target_time = current_quarter + datetime.timedelta(minutes=profile.window_minutes * i)
+        urls.append(generate_market_url(target_time, profile_key=profile.key))
         
     return urls
 
-def get_current_market_url():
+def get_current_market_url(profile_key=None):
     """
     Determines the URL for the 'current' necessary market.
     Logic: The current 15-min market start.
     """
+    profile = _market_profile(profile_key)
     now = datetime.datetime.now(pytz.utc)
     
     # Calculate current 15-minute interval start
     base_time = now.replace(second=0, microsecond=0)
     minutes = base_time.minute
-    remainder = minutes % 15
+    remainder = minutes % profile.window_minutes
     current_quarter = base_time - datetime.timedelta(minutes=remainder)
-    return generate_market_url(current_quarter)
+    return generate_market_url(current_quarter, profile_key=profile.key)
 
 def generate_urls_until_year_end():
     """
