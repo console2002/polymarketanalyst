@@ -54,3 +54,35 @@ def test_run_coarse_autotune_for_pairs_never_scores_non_shortlisted_pairs():
 
     assert seen_pairs == expected_pairs
     assert output_pairs == expected_pairs
+
+
+def test_run_coarse_autotune_for_pairs_progress_tracks_true_candidate_count():
+    progress_events = []
+
+    def progress_callback(current_step, total_steps, _message):
+        progress_events.append((current_step, total_steps))
+
+    def calculate_metrics(_df, _time_col, _minutes, _entry, _hold, _mode, _second):
+        return {
+            "strike_rate": 0.7,
+            "win_rate_needed": 0.6,
+            "total_count": 250,
+            "expectancy": 1.2,
+            "expected_pnl": 300,
+        }
+
+    run_coarse_autotune_for_pairs(
+        pd.DataFrame(),
+        "timestamp",
+        calculate_metrics,
+        minutes_entry_pairs=[(5.0, 0.65)],
+        hold_until_close_threshold_range=[0.6, 0.65, 0.7],
+        second_entry_threshold_range=[0.5, 0.55],
+        modes=["additive", "sole"],
+        progress_callback=progress_callback,
+    )
+
+    # hold=0.6 is invalid and should not be counted in total/progress
+    # valid evaluations = 2 holds * 2 second-entry thresholds * 2 modes = 8
+    assert progress_events
+    assert progress_events[-1] == (8, 8)

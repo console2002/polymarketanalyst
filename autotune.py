@@ -301,6 +301,10 @@ def run_coarse_autotune_for_pairs(
         (float(minutes_value), round(float(entry_value), 2))
         for minutes_value, entry_value in minutes_entry_pairs
     ]
+    normalized_pair_set = {
+        (round(float(minutes_value), 6), round(float(entry_value), 2))
+        for minutes_value, entry_value in pair_values
+    }
     hold_values = list(hold_until_close_threshold_range)
     second_entry_values = list(second_entry_threshold_range)
     mode_values = list(modes)
@@ -315,7 +319,6 @@ def run_coarse_autotune_for_pairs(
     for minutes_value, entry_value in pair_values:
         for hold_value in hold_values:
             if hold_value < entry_value:
-                completed_steps += len(second_entry_values) * len(mode_values)
                 continue
             for second_entry_value in second_entry_values:
                 for mode in mode_values:
@@ -390,6 +393,13 @@ def run_coarse_autotune_for_pairs(
                         "expected_pnl": expected_pnl,
                         "total_count": total_count,
                     }
+                    assert (
+                        round(float(minutes_value), 6),
+                        round(float(entry_value), 2),
+                    ) in normalized_pair_set, (
+                        "Phase 2 integrity failure: scored candidates include "
+                        "non-shortlisted phase-1 pairs"
+                    )
                     if (
                         min_total_count
                         and (
