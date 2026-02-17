@@ -2168,9 +2168,43 @@ def render_strike_rate_section(
             disabled=not save_results_enabled,
         )
 
+    def _build_filter_summary(df, minimum_samples):
+        total_rows = int(len(df))
+        removed_df = df[df["total_count"] < minimum_samples].copy()
+        retained_count = total_rows - int(len(removed_df))
+        removed_count = int(len(removed_df))
+        if not removed_df.empty:
+            dropped_preview = removed_df.sort_values("total_count", ascending=True).head(10).copy()
+            dropped_preview = dropped_preview[
+                [
+                    "minutes_after_open",
+                    "entry_threshold",
+                    "hold_until_close_threshold",
+                    "second_entry_mode",
+                    "total_count",
+                ]
+            ]
+        else:
+            dropped_preview = pd.DataFrame(
+                columns=[
+                    "minutes_after_open",
+                    "entry_threshold",
+                    "hold_until_close_threshold",
+                    "second_entry_mode",
+                    "total_count",
+                ]
+            )
+        return {
+            "total_rows": total_rows,
+            "removed_rows": removed_count,
+            "retained_rows": retained_count,
+            "dropped_preview": dropped_preview,
+        }
+
     if optimization_clicked:
         st.session_state.optimization_log_lines = []
         st.session_state.optimization_notice = None
+        st.session_state.optimization_filter_summaries = None
         _append_optimization_log("Starting optimization run (phase 1 + phase 2)", optimization_log_placeholder)
         if not coarse_second_entry_modes:
             st.session_state.optimization_result = None
@@ -2263,6 +2297,7 @@ def render_strike_rate_section(
                 )
                 phase1_df = _prepare_coarse_results_df(phase1_results)
                 phase1_df = phase1_df.dropna(subset=["expected_pnl", "total_count"])
+                phase1_filter_summary = _build_filter_summary(phase1_df, min_total_count)
                 if phase1_df.empty:
                     st.session_state.optimization_result = None
                     st.session_state.optimization_message = "No viable phase-1 candidates"
@@ -2343,6 +2378,34 @@ def render_strike_rate_section(
                     )
                     results_df = _prepare_coarse_results_df(phase2_results)
                     results_df = results_df.dropna(subset=["expected_pnl", "total_count"])
+                    phase2_filter_summary = _build_filter_summary(results_df, min_total_count)
+                    st.session_state.optimization_filter_summaries = {
+                        "min_autotune_samples": min_total_count,
+                        "phase_1": phase1_filter_summary,
+                        "phase_2": phase2_filter_summary,
+                    }
+                    summary_lines = [
+                        f"Min samples filter: {min_total_count}",
+                        (
+                            "Phase 1 — "
+                            f"evaluated={phase1_filter_summary['total_rows']}, "
+                            f"removed={phase1_filter_summary['removed_rows']}, "
+                            f"retained={phase1_filter_summary['retained_rows']}"
+                        ),
+                        (
+                            "Phase 2 — "
+                            f"evaluated={phase2_filter_summary['total_rows']}, "
+                            f"removed={phase2_filter_summary['removed_rows']}, "
+                            f"retained={phase2_filter_summary['retained_rows']}"
+                        ),
+                    ]
+                    status_container.warning("\n\n".join(summary_lines), icon="⚠️")
+                    dropped_candidates_df = phase2_filter_summary["dropped_preview"]
+                    if not dropped_candidates_df.empty:
+                        status_container.caption(
+                            "Top dropped phase-2 candidates (lowest sample counts):"
+                        )
+                        status_container.dataframe(dropped_candidates_df, width='stretch', hide_index=True)
                     eligible_results_df = results_df[results_df["total_count"] >= min_total_count]
                     final_results_df = eligible_results_df if not eligible_results_df.empty else results_df
                     if eligible_results_df.empty and not results_df.empty:
@@ -2393,6 +2456,15 @@ def render_strike_rate_section(
             f"expected_pnl={expected_pnl_display}, "
             f"samples={int(result['total_count']) if not pd.isna(result['total_count']) else 0}"
         )
+        result_sample_count = int(result["total_count"]) if not pd.isna(result.get("total_count")) else 0
+        min_total_count = int(st.session_state.get("min_autotune_samples", 200))
+        if result_sample_count <= (min_total_count + 20):
+            st.warning(
+                (
+                    "⚠️ Caution: best result is near the minimum sample threshold "
+                    f"({result_sample_count} samples vs minimum {min_total_count})."
+                )
+            )
     elif st.session_state.optimization_message:
         st.caption(st.session_state.optimization_message)
 
@@ -2406,6 +2478,24 @@ def render_coarse_results_explorer(results_df, objective, selected_cadence):
     if results_df is None or results_df.empty:
         return
     st.subheader("Optimization results explorer")
+    filter_summaries = st.session_state.get("optimization_filter_summaries")
+    if filter_summaries:
+        min_samples = int(filter_summaries.get("min_autotune_samples", 0))
+        phase_1 = filter_summaries.get("phase_1", {})
+        phase_2 = filter_summaries.get("phase_2", {})
+        st.caption(
+            "Sample filtering summary "
+            f"(min={min_samples}) — "
+            f"Phase 1: evaluated={phase_1.get('total_rows', 0)}, "
+            f"removed={phase_1.get('removed_rows', 0)}, retained={phase_1.get('retained_rows', 0)}; "
+            f"Phase 2: evaluated={phase_2.get('total_rows', 0)}, "
+            f"removed={phase_2.get('removed_rows', 0)}, retained={phase_2.get('retained_rows', 0)}"
+        )
+
+        dropped_candidates_df = phase_2.get("dropped_preview")
+        if isinstance(dropped_candidates_df, pd.DataFrame) and not dropped_candidates_df.empty:
+            st.caption("Dropped phase-2 candidates preview")
+            st.dataframe(dropped_candidates_df, width='stretch', hide_index=True)
     objective_column = "expected_pnl" if objective == "expected_pnl" else "edge"
     minutes_values = sorted(
         {
