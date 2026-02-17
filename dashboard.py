@@ -102,6 +102,23 @@ def _format_minutes_as_clock(minutes_value):
     return f"{minute_component}:{second_component:02d}"
 
 
+def _format_minutes_for_ui(minutes_value, cadence_key):
+    if cadence_key == "5min":
+        return _format_minutes_as_clock(minutes_value)
+    return f"{float(minutes_value):g}"
+
+
+def _humanize_autotune_progress_message(message, cadence_key):
+    if cadence_key != "5min" or not message:
+        return message
+
+    def _replace_minutes(match):
+        minutes_value = match.group(1)
+        return f"minutes_after_open={_format_minutes_for_ui(minutes_value, cadence_key)}"
+
+    return re.sub(r"minutes_after_open=([0-9]*\.?[0-9]+)", _replace_minutes, message)
+
+
 def add_vline_all_rows(fig, x, **kwargs):
     grid_ref = getattr(fig, "_grid_ref", None)
     row_count = len(grid_ref) if grid_ref else 1
@@ -2235,7 +2252,7 @@ def render_strike_rate_section(
 
         def _progress_callback(current_step, total_steps, message):
             progress_bar.progress(current_step / total_steps)
-            status_container.write(message)
+            status_container.write(_humanize_autotune_progress_message(message, selected_cadence))
 
         with status_container:
             def _autotune_metrics(df, column, minutes, threshold, hold_threshold):
@@ -2312,7 +2329,9 @@ def render_strike_rate_section(
                 def _coarse_progress_callback(current_step, total_steps, message):
                     if total_steps:
                         progress_bar.progress(current_step / total_steps)
-                    status_container.write(message)
+                    status_container.write(
+                        _humanize_autotune_progress_message(message, selected_cadence)
+                    )
 
                 def _coarse_autotune_metrics(
                     df,
@@ -2414,9 +2433,10 @@ def render_strike_rate_section(
                 st.session_state.coarse_autotune_message = "No viable data for coarse autotune"
     if st.session_state.autotune_result:
         result = st.session_state.autotune_result
+        minutes_value_display = _format_minutes_for_ui(result["minutes_after_open"], selected_cadence)
         st.caption(
             "Best: "
-            f"minutes_after_open={result['minutes_after_open']}, "
+            f"minutes_after_open={minutes_value_display}, "
             f"entry_threshold={result['entry_threshold']:.2f}, "
             f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
             f"strike_rate={result['strike_rate']:.2f}%, "
@@ -2427,6 +2447,7 @@ def render_strike_rate_section(
         st.caption(st.session_state.autotune_message)
     if st.session_state.coarse_autotune_result:
         result = st.session_state.coarse_autotune_result
+        minutes_value_display = _format_minutes_for_ui(result["minutes_after_open"], selected_cadence)
         expected_pnl_display = (
             f"{result['expected_pnl']:.2f}"
             if result.get("expected_pnl") is not None and not pd.isna(result.get("expected_pnl"))
@@ -2434,7 +2455,7 @@ def render_strike_rate_section(
         )
         st.caption(
             "Coarse best: "
-            f"minutes_after_open={result['minutes_after_open']}, "
+            f"minutes_after_open={minutes_value_display}, "
             f"entry_threshold={result['entry_threshold']:.2f}, "
             f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
             f"second_entry_threshold={result['second_entry_threshold']:.2f}, "
@@ -2504,17 +2525,18 @@ def render_strike_rate_section(
     render_coarse_results_explorer(
         st.session_state.get("coarse_autotune_results_df"),
         coarse_autotune_objective,
+        selected_cadence,
     )
 
 
-def render_coarse_results_explorer(results_df, objective):
+def render_coarse_results_explorer(results_df, objective, selected_cadence):
     if results_df is None or results_df.empty:
         return
     st.subheader("Coarse autotune results explorer")
     objective_column = "expected_pnl" if objective == "expected_pnl" else "edge"
     minutes_values = sorted(
         {
-            int(value)
+            float(value)
             for value in results_df["minutes_after_open"].dropna().unique().tolist()
         }
     )
@@ -2522,10 +2544,13 @@ def render_coarse_results_explorer(results_df, objective):
         {str(value) for value in results_df["second_entry_mode"].dropna().unique().tolist()}
     )
     minutes_selection = st.multiselect(
-        "Filter minutes after open",
+        "Filter minutes after open"
+        if selected_cadence != "5min"
+        else "Filter start after open (m:ss)",
         options=minutes_values,
         default=minutes_values,
-        key="coarse_results_minutes_filter",
+        format_func=lambda value: _format_minutes_for_ui(value, selected_cadence),
+        key=f"coarse_results_minutes_filter_{selected_cadence}",
     )
     mode_selection = st.multiselect(
         "Filter second entry modes",
@@ -2549,10 +2574,14 @@ def render_coarse_results_explorer(results_df, objective):
         st.info("No coarse autotune results match the selected filters.")
         return
 
-    facet_col = "minutes_after_open" if len(minutes_selection) > 1 else None
+    filtered_df = filtered_df.copy()
+    filtered_df["minutes_after_open_label"] = filtered_df["minutes_after_open"].apply(
+        lambda value: _format_minutes_for_ui(value, selected_cadence)
+    )
+    facet_col = "minutes_after_open_label" if len(minutes_selection) > 1 else None
     facet_row = "second_entry_mode" if len(mode_selection) > 1 else None
     hover_columns = [
-        "minutes_after_open",
+        "minutes_after_open_label",
         "second_entry_mode",
         "second_entry_threshold",
         "strike_rate",
