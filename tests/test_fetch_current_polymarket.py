@@ -17,14 +17,14 @@ def test_resolve_market_by_slug_parses_clob_token_ids(monkeypatch):
 def test_resolve_current_market_tries_next_window(monkeypatch):
     start_time = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
 
-    def fake_get_current_market_urls():
+    def fake_get_current_market_urls(profile_key=None):
         return {
             "polymarket": "https://example.com/unused",
             "target_time_utc": start_time,
             "expiration_time_utc": start_time + datetime.timedelta(minutes=15),
         }
 
-    def fake_generate_market_url(target_time):
+    def fake_generate_market_url(target_time, profile_key=None):
         return f"https://example.com/btc-updown-15m-{int(target_time.timestamp())}"
 
     calls = []

@@ -12,6 +12,7 @@ from urllib3.util.retry import Retry
 
 from get_current_markets import get_current_market_urls
 from find_new_market import generate_market_url
+from market_profiles import default_market_profile_key, get_market_profile
 
 
 # Configuration
@@ -21,8 +22,11 @@ POLYMARKET_TIMEOUT = (3, 10)
 POLYMARKET_RATE_LIMIT_SECONDS = 1
 _POLYMARKET_SESSION = None
 _LAST_POLYMARKET_CALL_AT = None
-_FIFTEEN_MINUTES = datetime.timedelta(minutes=15)
 _LOGGER = logging.getLogger(__name__)
+
+
+def _selected_profile(profile_key=None):
+    return get_market_profile(profile_key or default_market_profile_key())
 
 
 def _get_polymarket_session():
@@ -151,8 +155,9 @@ def _parse_iso_datetime(value):
     return None
 
 
-def _market_window_from_slug(slug):
-    match = re.search(r"btc-updown-15m-(\d+)", slug or "")
+def _market_window_from_slug(slug, profile_key=None):
+    profile = _selected_profile(profile_key)
+    match = re.search(rf"{re.escape(profile.slug_prefix)}-(\d+)", slug or "")
     if not match:
         return None, None
     try:
@@ -162,7 +167,7 @@ def _market_window_from_slug(slug):
         )
     except (ValueError, OSError, OverflowError):
         return None, None
-    expiration = target_time + _FIFTEEN_MINUTES
+    expiration = target_time + datetime.timedelta(minutes=profile.window_minutes)
     return target_time, expiration
 
 
@@ -261,17 +266,18 @@ def fetch_polymarket_data_struct():
     return resolve_current_market()
 
 
-def resolve_market_by_start_time(start_time_utc):
+def resolve_market_by_start_time(start_time_utc, profile_key=None):
+    profile = _selected_profile(profile_key)
     if start_time_utc is None:
         return None, "Start time is required"
     if start_time_utc.tzinfo is None:
         start_time_utc = start_time_utc.replace(tzinfo=datetime.timezone.utc)
-    polymarket_url = generate_market_url(start_time_utc)
+    polymarket_url = generate_market_url(start_time_utc, profile_key=profile.key)
     slug = polymarket_url.split("/")[-1]
     poly_data, poly_err = resolve_market_by_slug(slug)
     if poly_err:
         return None, f"Polymarket Error: {poly_err}"
-    target_time_utc, expiration_time_utc = _market_window_from_slug(slug)
+    target_time_utc, expiration_time_utc = _market_window_from_slug(slug, profile_key=profile.key)
     result = {
         "slug": slug,
         "polymarket_url": polymarket_url,
@@ -284,29 +290,32 @@ def resolve_market_by_start_time(start_time_utc):
     return result, None
 
 
-def resolve_market_by_expiration(expiration_time_utc):
+def resolve_market_by_expiration(expiration_time_utc, profile_key=None):
+    profile = _selected_profile(profile_key)
     if expiration_time_utc is None:
         return None, "Expiration time is required"
     if expiration_time_utc.tzinfo is None:
         expiration_time_utc = expiration_time_utc.replace(tzinfo=datetime.timezone.utc)
-    start_time_utc = expiration_time_utc - _FIFTEEN_MINUTES
-    return resolve_market_by_start_time(start_time_utc)
+    start_time_utc = expiration_time_utc - datetime.timedelta(minutes=profile.window_minutes)
+    return resolve_market_by_start_time(start_time_utc, profile_key=profile.key)
 
 
-def resolve_current_market():
+def resolve_current_market(profile_key=None):
     """
     Resolve the active market slug and token IDs with a single Polymarket API call.
     """
     try:
-        market_info = get_current_market_urls()
+        profile = _selected_profile(profile_key)
+        market_info = get_current_market_urls(profile_key=profile.key)
         target_time_utc = market_info["target_time_utc"]
         expiration_time_utc = market_info["expiration_time_utc"]
 
-        candidate_times = [target_time_utc + _FIFTEEN_MINUTES * offset for offset in range(3)]
+        window_delta = datetime.timedelta(minutes=profile.window_minutes)
+        candidate_times = [target_time_utc + window_delta * offset for offset in range(3)]
         last_error = None
 
         for candidate_time in candidate_times:
-            polymarket_url = generate_market_url(candidate_time)
+            polymarket_url = generate_market_url(candidate_time, profile_key=profile.key)
             slug = polymarket_url.split("/")[-1]
 
             poly_data, poly_err = resolve_market_by_slug(slug)
@@ -316,12 +325,12 @@ def resolve_current_market():
                     continue
                 return None, f"Polymarket Error: {poly_err}"
 
-            slug_target_time, slug_expiration_time = _market_window_from_slug(slug)
+            slug_target_time, slug_expiration_time = _market_window_from_slug(slug, profile_key=profile.key)
             target_time_utc = slug_target_time or poly_data.get("start_time") or candidate_time
             expiration_time_utc = (
                 slug_expiration_time
                 or poly_data.get("end_time")
-                or (target_time_utc + _FIFTEEN_MINUTES)
+                or (target_time_utc + window_delta)
             )
 
             result = {
