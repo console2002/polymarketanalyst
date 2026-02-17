@@ -57,6 +57,7 @@ def _get_cadence_autotune_config(cadence_key):
             "minutes_after_open_max": 12,
             "minutes_after_open_default": 5,
             "minutes_after_open_step": 1,
+            "minutes_after_open_help": "15min cadence: choose a whole minute from 5 to 12 minutes after market open.",
             "coarse_minutes_min": 5,
             "coarse_minutes_max": 12,
             "coarse_minutes_default": (5, 12),
@@ -64,10 +65,11 @@ def _get_cadence_autotune_config(cadence_key):
         },
         "5min": {
             "market_window_minutes": 5,
-            "minutes_after_open_min": 1,
-            "minutes_after_open_max": 4,
-            "minutes_after_open_default": 2,
-            "minutes_after_open_step": 1,
+            "minutes_after_open_min": 0.5,
+            "minutes_after_open_max": 4.5,
+            "minutes_after_open_default": 2.0,
+            "minutes_after_open_step": 0.5,
+            "minutes_after_open_help": "5min cadence: choose 30-second increments from 0:30 to 4:30 after market open.",
             "coarse_minutes_min": 1,
             "coarse_minutes_max": 4,
             "coarse_minutes_default": (1, 4),
@@ -77,7 +79,7 @@ def _get_cadence_autotune_config(cadence_key):
     config = base_config.get(cadence_key, base_config[DEFAULT_CADENCE_KEY]).copy()
     config.update(
         {
-            "minutes_display_format": "%d",
+            "minutes_display_format": "%g",
             "seconds_display_format": "%d",
             "minutes_display_label": "{value} min",
             "seconds_display_label": "{value} sec",
@@ -467,7 +469,7 @@ def _build_second_entry_cache_key(
     payload = {
         "schema_version": CACHE_SCHEMA_VERSION,
         "data_signature": data_signature,
-        "minutes_after_open": int(minutes_after_open),
+        "minutes_after_open": float(minutes_after_open),
         "entry_threshold": float(entry_threshold),
         "hold_until_close_threshold": float(hold_until_close_threshold),
         "second_entry_threshold": float(second_entry_threshold),
@@ -2648,6 +2650,7 @@ def render_dashboard():
         value=cadence_autotune_config["minutes_after_open_default"],
         step=cadence_autotune_config["minutes_after_open_step"],
         format=cadence_autotune_config["minutes_display_format"],
+        help=cadence_autotune_config["minutes_after_open_help"],
     )
     st.sidebar.caption(
         "Market window: "
