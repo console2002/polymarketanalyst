@@ -24,6 +24,7 @@ import websockets
 from websockets.exceptions import InvalidMessage
 
 from find_new_market import generate_market_url
+from market_profiles import default_market_profile_key, get_market_profile
 from websocket_logger import PolymarketWebsocketLogger, STALE_THRESHOLD_SECONDS
 
 LOGGING_INTERVAL_SECONDS = 1  # logh time in seconds, use x for fastest.
@@ -33,7 +34,6 @@ TIMEZONE_ET = pytz.timezone("US/Eastern")
 TIMEZONE_UK = pytz.timezone("Europe/London")
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
-MARKET_DURATION = datetime.timedelta(minutes=15)
 SCRIPT_DIR = os.path.dirname(__file__)
 PID_FILE = os.path.join(SCRIPT_DIR, "data_logger_ui.pid")
 GAMMA_MARKET_SLUG_URL = "https://gamma-api.polymarket.com/markets/slug"
@@ -82,16 +82,17 @@ def _format_timestamp_utc(value):
     return value.astimezone(pytz.utc).isoformat()
 
 
-def _get_data_file(timestamp_dt):
+def _get_data_file(timestamp_dt, data_subdir):
     if not timestamp_dt:
         timestamp_dt = datetime.datetime.now(pytz.utc)
     if timestamp_dt.tzinfo is None:
         timestamp_dt = pytz.utc.localize(timestamp_dt)
     date_str = timestamp_dt.astimezone(TIMEZONE_ET).strftime(DATE_FORMAT)
-    return os.path.join(SCRIPT_DIR, f"{date_str}.csv")
+    return os.path.join(SCRIPT_DIR, "data", data_subdir, f"{date_str}.csv")
 
 
 def _ensure_csv(file_path):
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     if not os.path.exists(file_path):
         with open(file_path, mode="w", newline="") as file:
             writer = csv.writer(file)
@@ -187,12 +188,12 @@ def _stop_logger_pid(pid):
     return True, f"Stop signal sent to logger PID {pid}."
 
 
-def _current_market_window():
+def _current_market_window(profile):
     now = datetime.datetime.now(pytz.utc)
     base_time = now.replace(second=0, microsecond=0)
-    remainder = base_time.minute % 15
+    remainder = base_time.minute % profile.window_minutes
     start_time_utc = base_time - datetime.timedelta(minutes=remainder)
-    expiration_time_utc = start_time_utc + MARKET_DURATION
+    expiration_time_utc = start_time_utc + datetime.timedelta(minutes=profile.window_minutes)
     return start_time_utc, expiration_time_utc
 
 
@@ -242,10 +243,10 @@ def _fetch_gamma_market(slug):
     return response.json(), None
 
 
-def _resolve_market_by_start_time(start_time_utc):
+def _resolve_market_by_start_time(start_time_utc, profile):
     if start_time_utc.tzinfo is None:
         start_time_utc = pytz.utc.localize(start_time_utc)
-    polymarket_url = generate_market_url(start_time_utc)
+    polymarket_url = generate_market_url(start_time_utc, profile_key=profile.key)
     slug = polymarket_url.split("/")[-1]
     gamma_market, gamma_err = _fetch_gamma_market(slug)
     if gamma_err:
@@ -257,8 +258,10 @@ def _resolve_market_by_start_time(start_time_utc):
             f"gamma_slug_invalid_clob_token_ids slug={slug} count={len(clob_token_ids)}",
         )
     outcomes = _parse_list_field(gamma_market.get("outcomes", []))
-    expiration_time_utc = start_time_utc + MARKET_DURATION
+    expiration_time_utc = start_time_utc + datetime.timedelta(minutes=profile.window_minutes)
     return {
+        "profile_key": profile.key,
+        "data_subdir": profile.data_subdir,
         "slug": slug,
         "polymarket_url": polymarket_url,
         "clob_token_ids": clob_token_ids,
@@ -268,13 +271,14 @@ def _resolve_market_by_start_time(start_time_utc):
     }, None
 
 
-def _resolve_current_market():
-    start_time_utc, _ = _current_market_window()
-    candidate_times = [start_time_utc + MARKET_DURATION * offset for offset in range(3)]
+def _resolve_current_market(profile):
+    start_time_utc, _ = _current_market_window(profile)
+    market_duration = datetime.timedelta(minutes=profile.window_minutes)
+    candidate_times = [start_time_utc + market_duration * offset for offset in range(3)]
     last_error = None
 
     for candidate_time in candidate_times:
-        market_info, err = _resolve_market_by_start_time(candidate_time)
+        market_info, err = _resolve_market_by_start_time(candidate_time, profile)
         if err:
             last_error = err
             if "gamma_slug_not_found" in err:
@@ -472,6 +476,7 @@ class PriceAggregator:
         self._interval_seconds = _resolve_logging_interval()
         self._last_interval_bucket = None
         self.outcome_order = market_info.get("outcomes") or []
+        self.data_subdir = market_info.get("data_subdir", "15min")
         self._current_file_path = None
         self._current_file_handle = None
         self._current_writer = None
@@ -610,7 +615,10 @@ class PriceAggregator:
             ]
             rows.append(row)
 
-        data_file = _get_data_file(self._event_timestamp(up_update, down_update, timestamp_dt))
+        data_file = _get_data_file(
+            self._event_timestamp(up_update, down_update, timestamp_dt),
+            self.data_subdir,
+        )
         writer = self._get_writer(data_file)
         writer.writerows(rows)
         if self._broadcaster:
@@ -680,7 +688,9 @@ class PriceAggregator:
         return max(numeric_ages)
 
 
-async def run_logger(broadcaster=None, stop_event=None):
+async def run_logger(profile_key=None, broadcaster=None, stop_event=None):
+    profile = get_market_profile(profile_key or default_market_profile_key())
+    market_duration = datetime.timedelta(minutes=profile.window_minutes)
     if stop_event is None:
         stop_event = asyncio.Event()
     if broadcaster:
@@ -692,9 +702,9 @@ async def run_logger(broadcaster=None, stop_event=None):
     try:
         while not stop_event.is_set():
             if next_start_time:
-                market_info, err = _resolve_market_by_start_time(next_start_time)
+                market_info, err = _resolve_market_by_start_time(next_start_time, profile)
             else:
-                market_info, err = _resolve_current_market()
+                market_info, err = _resolve_current_market(profile)
             if err:
                 print(f"Error: {err}")
                 await asyncio.sleep(STATUS_CHECK_INTERVAL_SECONDS)
@@ -711,7 +721,7 @@ async def run_logger(broadcaster=None, stop_event=None):
                 continue
 
             aggregator = PriceAggregator(market_info, broadcaster=broadcaster)
-            _ensure_csv(_get_data_file(now))
+            _ensure_csv(_get_data_file(now, profile.data_subdir))
             ws_logger = PolymarketWebsocketLogger(market_info, aggregator.handle_update)
             stop_task = asyncio.create_task(stop_event.wait())
             logger_task = asyncio.create_task(ws_logger.run())
@@ -747,7 +757,7 @@ async def run_logger(broadcaster=None, stop_event=None):
                     if target_time:
                         next_start_time = target_time
                     elif expiration:
-                        next_start_time = expiration - MARKET_DURATION
+                        next_start_time = expiration - market_duration
                     else:
                         next_start_time = None
                     continue
@@ -772,10 +782,10 @@ def _install_signal_handlers(stop_event):
             loop.add_signal_handler(signum, stop_event.set)
 
 
-async def _run_with_signals(broadcaster):
+async def _run_with_signals(profile_key, broadcaster):
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
-    await run_logger(broadcaster, stop_event=stop_event)
+    await run_logger(profile_key=profile_key, broadcaster=broadcaster, stop_event=stop_event)
 
 
 def main():
@@ -784,6 +794,12 @@ def main():
         "--stop",
         action="store_true",
         help="Stop a running logger instance using the PID file.",
+    )
+    parser.add_argument(
+        "--market-type",
+        choices=["btc_15m", "btc_5m"],
+        default=default_market_profile_key(),
+        help="Market profile to track (default: btc_15m).",
     )
     parser.add_argument(
         "--ui-stream",
@@ -836,7 +852,7 @@ def main():
             port_fallback_attempts=args.ui_stream_port_fallbacks,
         )
     try:
-        asyncio.run(_run_with_signals(broadcaster))
+        asyncio.run(_run_with_signals(args.market_type, broadcaster))
     except KeyboardInterrupt:
         print("\nStopping logger...")
 
