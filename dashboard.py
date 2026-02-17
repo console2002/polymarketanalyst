@@ -62,6 +62,7 @@ def _get_cadence_autotune_config(cadence_key):
             "coarse_minutes_max": 12,
             "coarse_minutes_default": (5, 12),
             "coarse_minutes_step": 2,
+            "coarse_minutes_format": "%d",
         },
         "5min": {
             "market_window_minutes": 5,
@@ -70,10 +71,11 @@ def _get_cadence_autotune_config(cadence_key):
             "minutes_after_open_default": 2.0,
             "minutes_after_open_step": 0.5,
             "minutes_after_open_help": "5min cadence: choose 30-second increments from 0:30 to 4:30 after market open.",
-            "coarse_minutes_min": 1,
-            "coarse_minutes_max": 4,
-            "coarse_minutes_default": (1, 4),
-            "coarse_minutes_step": 1,
+            "coarse_minutes_min": 0.5,
+            "coarse_minutes_max": 4.5,
+            "coarse_minutes_default": (0.5, 4.5),
+            "coarse_minutes_step": 0.5,
+            "coarse_minutes_format": "%.1f",
         },
     }
     config = base_config.get(cadence_key, base_config[DEFAULT_CADENCE_KEY]).copy()
@@ -92,6 +94,12 @@ def _get_cadence_autotune_config(cadence_key):
         }
     )
     return config
+
+
+def _format_minutes_as_clock(minutes_value):
+    total_seconds = int(round(float(minutes_value) * 60))
+    minute_component, second_component = divmod(total_seconds, 60)
+    return f"{minute_component}:{second_component:02d}"
 
 
 def add_vline_all_rows(fig, x, **kwargs):
@@ -2073,23 +2081,35 @@ def render_strike_rate_section(
     coarse_hold_step = cadence_autotune_config["coarse_hold_step"]
     coarse_second_entry_step = cadence_autotune_config["coarse_second_entry_step"]
     minutes_display_format = cadence_autotune_config["minutes_display_format"]
+    coarse_minutes_format = cadence_autotune_config["coarse_minutes_format"]
 
     with st.expander("Coarse autotune settings", expanded=False):
+        coarse_slider_label = "Minutes after open range"
+        if selected_cadence == "5min":
+            coarse_slider_label = "Start/end after open (m:ss)"
         coarse_minutes_range = st.slider(
-            "Minutes after open range",
+            coarse_slider_label,
             min_value=coarse_minutes_min,
             max_value=coarse_minutes_max,
             value=coarse_minutes_default,
             step=coarse_minutes_step,
-            format=minutes_display_format,
+            format=coarse_minutes_format,
             key="coarse_minutes_after_open_range",
         )
-        st.caption(
+        cadence_caption = (
             "Market window cadence: "
             + cadence_autotune_config["minutes_display_label"].format(
                 value=cadence_autotune_config["market_window_minutes"]
             )
         )
+        if selected_cadence == "5min":
+            cadence_caption += (
+                f" | Coarse range selected: "
+                f"{_format_minutes_as_clock(coarse_minutes_range[0])}"
+                f"..{_format_minutes_as_clock(coarse_minutes_range[1])}"
+                " (30-second steps)"
+            )
+        st.caption(cadence_caption)
         coarse_entry_range = st.slider(
             "Entry threshold range",
             min_value=coarse_entry_bounds[0],
@@ -2302,9 +2322,9 @@ def render_strike_rate_section(
                     history_df,
                     history_time_column,
                     _coarse_autotune_metrics,
-                    minutes_range=range(
+                    minutes_range=np.arange(
                         coarse_minutes_range[0],
-                        coarse_minutes_range[1] + 1,
+                        coarse_minutes_range[1] + (coarse_minutes_step / 2),
                         coarse_minutes_step,
                     ),
                     entry_threshold_range=np.arange(
