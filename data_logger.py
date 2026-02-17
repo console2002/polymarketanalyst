@@ -89,10 +89,20 @@ def _get_data_file(timestamp_dt, active_profile):
     if timestamp_dt.tzinfo is None:
         timestamp_dt = pytz.utc.localize(timestamp_dt)
 
-    data_subdir = active_profile.data_subdir
+    profile = _resolve_profile(
+        profile=active_profile if not isinstance(active_profile, str) else None,
+        profile_key=active_profile if isinstance(active_profile, str) else None,
+    )
+    profile_data_subdirs = {
+        "btc_15m": "15min",
+        "btc_5m": "5min",
+    }
+    data_subdir = profile_data_subdirs.get(profile.key, profile.data_subdir)
 
     date_str = timestamp_dt.astimezone(TIMEZONE_ET).strftime(DATE_FORMAT)
-    return os.path.join(SCRIPT_DIR, "data", data_subdir, f"{date_str}.csv")
+    data_dir = os.path.join(SCRIPT_DIR, "data", data_subdir)
+    os.makedirs(data_dir, exist_ok=True)
+    return os.path.join(data_dir, f"{date_str}.csv")
 
 
 def _ensure_csv(file_path):

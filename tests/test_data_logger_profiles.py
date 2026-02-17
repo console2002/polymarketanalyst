@@ -89,10 +89,10 @@ def test_run_logger_rollover_uses_profile_duration(monkeypatch):
         async def shutdown(self):
             return None
 
-    def fake_resolve_current_market(profile_key=None):
+    def fake_resolve_current_market(profile_key=None, profile=None):
         return ({"expiration_time_utc": expiration, "profile_key": profile_key}, None)
 
-    def fake_resolve_market_by_start_time(start_time_utc, profile_key=None):
+    def fake_resolve_market_by_start_time(start_time_utc, profile_key=None, profile=None):
         captured_start_times.append(start_time_utc)
         stop_event.set()
         return (None, "stop")
