@@ -2259,6 +2259,12 @@ def render_strike_rate_section(
                 history_df,
                 history_time_column,
                 _autotune_metrics,
+                minutes_range=np.arange(
+                    cadence_autotune_config["minutes_after_open_min"],
+                    cadence_autotune_config["minutes_after_open_max"]
+                    + (cadence_autotune_config["minutes_after_open_step"] / 2),
+                    cadence_autotune_config["minutes_after_open_step"],
+                ),
                 progress_callback=_progress_callback,
                 objective=autotune_objective,
             )

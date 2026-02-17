@@ -8,12 +8,14 @@ def run_autotune(
     df,
     time_column,
     calculate_metrics,
-    minutes_range=range(5, 14),
+    minutes_range=None,
     entry_threshold_range=np.arange(0.60, 0.801, 0.02),
     hold_until_close_threshold_range=np.arange(0.60, 0.801, 0.02),
     progress_callback=None,
     objective="edge",
 ):
+    if minutes_range is None:
+        raise ValueError("minutes_range must be provided explicitly")
     best_result = None
     best_score = None
     minutes_values = list(minutes_range)
