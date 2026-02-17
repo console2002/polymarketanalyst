@@ -1210,6 +1210,7 @@ def _update_window_summary_state(
     second_entry_threshold,
     trade_value_usd,
     current_open,
+    selected_cadence_minutes,
 ):
     _initialize_window_summary_state(
         minutes_after_open,
@@ -1269,7 +1270,9 @@ def _update_window_summary_state(
             if new_loss_seen:
                 last_updated = st.session_state.window_summary_last_updated
                 now = pd.Timestamp.utcnow()
-                if pd.isna(last_updated) or now - last_updated >= pd.Timedelta(minutes=15):
+                if pd.isna(last_updated) or now - last_updated >= pd.Timedelta(
+                    minutes=selected_cadence_minutes
+                ):
                     recalculate_window_summary = True
 
     if recalculate_window_summary and history_df is not None and not history_df.empty:
@@ -1336,6 +1339,7 @@ def _should_recalculate_summary(
     second_entry_threshold,
     trade_value_usd,
     test_balance_start,
+    selected_cadence_minutes,
 ):
     should_recalculate = pd.isna(st.session_state.last_summary_updated)
     if pd.notna(current_open):
@@ -1356,7 +1360,9 @@ def _should_recalculate_summary(
     if not should_recalculate:
         last_updated = st.session_state.last_summary_updated
         now = pd.Timestamp.utcnow()
-        if pd.isna(last_updated) or now - last_updated >= pd.Timedelta(minutes=15):
+        if pd.isna(last_updated) or now - last_updated >= pd.Timedelta(
+            minutes=selected_cadence_minutes
+        ):
             should_recalculate = True
     return should_recalculate
 
@@ -1421,7 +1427,7 @@ def prepare_probability_window(
         "total_markets": total_markets,
     }
 
-def build_market_summary_table(df_window, latest, time_column):
+def build_market_summary_table(df_window, latest, time_column, selected_cadence_minutes):
     latest_timestamp = df_window[time_column].max()
     market_rows = df_window[df_window['TargetTime'] == latest['TargetTime']]
     market_start_time = market_rows[time_column].min()
@@ -1429,7 +1435,7 @@ def build_market_summary_table(df_window, latest, time_column):
     if pd.isna(market_start_time):
         countdown_display = "N/A"
     else:
-        market_end_time = market_open_time + pd.Timedelta(minutes=15)
+        market_end_time = market_open_time + pd.Timedelta(minutes=selected_cadence_minutes)
         remaining_seconds = int((market_end_time - latest_timestamp).total_seconds())
         remaining_seconds = max(0, remaining_seconds)
         minutes_left = remaining_seconds // 60
@@ -1460,6 +1466,7 @@ def render_probability_history(
     hold_until_close_threshold,
     second_entry_mode,
     second_entry_threshold,
+    selected_cadence_minutes,
 ):
     df_window = chart_data["df_window"]
     max_offset = chart_data["max_offset"]
@@ -1492,14 +1499,14 @@ def render_probability_history(
         if st.button("Reset Zoom", key='reset_zoom_button'):
             st.session_state.zoom_mode = None
     with col_z2:
-        if st.button("Zoom Last 15m", key='zoom_15m_button'):
-            st.session_state.zoom_mode = 'last_15m'
+        if st.button(f"Zoom Last {selected_cadence_minutes}m", key='zoom_last_market_button'):
+            st.session_state.zoom_mode = 'last_market'
 
     # Calculate range based on mode
     current_range = None
-    if st.session_state.zoom_mode == 'last_15m':
+    if st.session_state.zoom_mode == 'last_market':
         end_time = df_window[time_column].max()
-        start_time = end_time - pd.Timedelta(minutes=15)
+        start_time = end_time - pd.Timedelta(minutes=selected_cadence_minutes)
         current_range = [start_time, end_time]
 
     trace_mode = "lines+markers" if show_markers else "lines"
@@ -1765,6 +1772,7 @@ def compute_summary_state(
     summary_reference_time,
     today_start_time,
     current_open,
+    selected_cadence_minutes,
     precomputed_groups=None,
     precomputed_target_order=None,
 ):
@@ -1807,6 +1815,7 @@ def compute_summary_state(
         second_entry_threshold,
         trade_value_usd,
         current_open,
+        selected_cadence_minutes,
     )
 
     _initialize_summary_refresh_state(
@@ -1827,6 +1836,7 @@ def compute_summary_state(
         second_entry_threshold,
         trade_value_usd,
         test_balance_start,
+        selected_cadence_minutes,
     )
     profit_loss_summary = st.session_state.profit_loss_summary
     drawdown_summary = st.session_state.drawdown_summary
@@ -2569,7 +2579,7 @@ def render_dashboard():
         index=tuple(CADENCE_OPTIONS.keys()).index(DEFAULT_CADENCE_KEY),
         help="Choose which cadence folder to load dated CSV files from.",
     )
-    expected_cadence_minutes = CADENCE_OPTIONS[cadence_key]
+    selected_cadence_minutes = CADENCE_OPTIONS[cadence_key]
 
     selected_date_state_key = f"selected_date_{cadence_key}"
     files_by_date, legacy_path = _get_available_data_files_for_cadence(cadence_key)
@@ -2600,11 +2610,11 @@ def render_dashboard():
     progress_bar = progress_container.progress(0, text="Loading data files…")
 
     df, resolved_date, load_warnings = load_data(
-        selected_date, files_by_date, legacy_path, expected_cadence_minutes, cadence_key
+        selected_date, files_by_date, legacy_path, selected_cadence_minutes, cadence_key
     )
     progress_bar.progress(0.25, text="Loaded selected data file.")
     history_df, history_warnings = load_all_data(
-        files_by_date, legacy_path, expected_cadence_minutes, cadence_key
+        files_by_date, legacy_path, selected_cadence_minutes, cadence_key
     )
     progress_bar.progress(0.45, text="Loaded historical data.")
     if history_df is None or history_df.empty:
@@ -2677,6 +2687,7 @@ def render_dashboard():
             summary_reference_time,
             today_start_time,
             current_open,
+            selected_cadence_minutes,
             precomputed_groups=history_market_groups,
             precomputed_target_order=history_target_order,
         )
@@ -2706,6 +2717,7 @@ def render_dashboard():
                 probability_window["df_window"],
                 probability_window["latest"],
                 time_column,
+                selected_cadence_minutes,
             )
             st.dataframe(market_summary_table, width="stretch")
             render_profit_loss_section(summary_state)
@@ -2724,6 +2736,7 @@ def render_dashboard():
             hold_until_close_threshold,
             second_entry_mode,
             second_entry_threshold,
+            selected_cadence_minutes,
         )
 
         with st.expander("Window summary"):
