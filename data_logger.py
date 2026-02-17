@@ -731,10 +731,12 @@ async def run_logger(
             if next_start_time:
                 market_info, err = _resolve_market_by_start_time(
                     next_start_time,
+                    profile_key=selected_profile_key,
                     profile=selected_profile,
                 )
             else:
                 market_info, err = _resolve_current_market(
+                    profile_key=selected_profile_key,
                     profile=selected_profile
                 )
             if err:
@@ -893,6 +895,7 @@ def main():
         print(f"Invalid --market-type '{args.market_type}': {exc}")
         sys.exit(2)
 
+    print(f"Selected market type: {selected_profile.key}")
     print(
         "Starting Data Logger... "
         f"market_profile={selected_profile.key} "
