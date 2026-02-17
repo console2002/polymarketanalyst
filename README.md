@@ -163,6 +163,21 @@ This script will analyze historical data for arbitrage opportunities and report 
 - Hover over the charts to see exact values with the unified crosshair
 - The charts are linked - zooming one automatically zooms the other
 
+### Dashboard Optimization Workflow
+- Use **Run Optimization** to execute a streamlined two-phase search focused on **Max Expected P/L**.
+- **Phase 1 (fast scout)** tests base entries with second-entry disabled.
+- **Phase 2 (refine)** automatically tunes second-entry settings only for the best phase-1 candidates.
+- Set **Minimum optimization samples** in the left sidebar (default `200`). Candidates below the threshold are ignored.
+- For 5-minute cadence, optimization now supports **5-second increments** to trial finer entry timing.
+- Keep optimization settings compact by default and use **Advanced optimization settings** only when needed.
+
+### Bot-readiness checklist
+Before using a setup in automation, confirm:
+- Positive expected P/L on optimization output.
+- Sample count meets or exceeds your minimum threshold.
+- Strategy behavior is stable when rerun on fresh data windows.
+- Results remain sensible after applying realistic execution assumptions (spread/slippage).
+
 ## What gets logged
 The logger writes a row per outcome (Up and Down) each time it logs. Files are created per day using US/Eastern dates.
 
