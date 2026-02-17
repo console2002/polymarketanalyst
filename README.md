@@ -1,6 +1,6 @@
 # Polymarket BTC Monitor
 
-A Python-based tool to monitor **Polymarket's 15-minute Bitcoin (BTC) Up/Down prediction markets**. Features real-time data logging and an interactive dashboard for analyzing market behavior and identifying potential opportunities.
+A Python-based tool to monitor **Polymarket's 5-minute and 15-minute Bitcoin (BTC) Up/Down prediction markets**. Features real-time data logging and an interactive dashboard for analyzing market behavior and identifying potential opportunities.
 
 ## Quickstart (Windows)
 
@@ -20,7 +20,13 @@ cd /d D:\GitHub\polymarketanalyst
 ### 3) Start the logger
 
 ```bat
-python data_logger.py --ui-stream
+python data_logger.py --ui-stream --market-type btc_15m
+```
+
+or
+
+```bat
+python data_logger.py --ui-stream --market-type btc_5m
 ```
 
 ### 4) Start the GUI (in a new terminal, after activating the venv)
@@ -45,7 +51,7 @@ If you see a Windows “file in use” error, close any previous Streamlit proce
 Recent updates have brought significant improvements to both the backtesting capabilities and the data logging service, enhancing overall analysis and strategy development.
 
 ### Data Collection
-- **Automated Market Detection**: Automatically finds the currently active 15-minute BTC market
+- **Automated Market Detection**: Supports currently active 5-minute and 15-minute BTC markets
 - **Real-time Data Logging**: Continuously fetches and logs market data.
 - **CSV Storage**: Historical data stored in daily CSV files (one per day) for analysis.
 
@@ -100,13 +106,17 @@ install.bat
 
 Then run the logger and GUI in separate terminals:
 ```bat
-.\.venv\Scripts\python.exe data_logger.py
+.\.venv\Scripts\python.exe data_logger.py --ui-stream --market-type btc_15m
+```
+or
+```bat
+.\.venv\Scripts\python.exe data_logger.py --ui-stream --market-type btc_5m
 ```
 ```bat
 .\.venv\Scripts\python.exe -m streamlit run logger_gui.py
 ```
 
-This will continuously fetch market data and save it to daily CSV files (one per day, named `DDMMYYYY.csv`). The GUI will open in your browser at `http://localhost:8501`.
+This will continuously fetch market data and save it to daily CSV files (one per day, named `DDMMYYYY.csv`) in `data/15min/` or `data/5min/` depending on `--market-type`. The GUI will open in your browser at `http://localhost:8501`.
 
 #### How to Run backtester
 
@@ -133,7 +143,10 @@ This script will analyze historical data for arbitrage opportunities and report 
 - The charts are linked - zooming one automatically zooms the other
 
 ## What gets logged
-The logger writes a row per outcome (Up and Down) each time it logs. Files are created per day using US/Eastern dates (e.g., `24032025.csv`).
+The logger writes a row per outcome (Up and Down) each time it logs. Files are created per day using US/Eastern dates.
+
+- 15-minute market logs: `data/15min/DDMMYYYY.csv`
+- 5-minute market logs: `data/5min/DDMMYYYY.csv`
 
 | Column | Description |
 | --- | --- |
@@ -163,8 +176,17 @@ The logger writes a row per outcome (Up and Down) each time it logs. Files are c
 ## Daily file rotation
 The logger writes to one CSV file per day using the US/Eastern date (format `DDMMYYYY.csv`). At midnight ET, it switches to a new file automatically.
 
+- 15-minute market rotation path: `data/15min/DDMMYYYY.csv`
+- 5-minute market rotation path: `data/5min/DDMMYYYY.csv`
+
 ## Default market selection
-By default, the logger tracks the **current 15-minute market**: the contract that expires at the next 15-minute boundary. The GUI mirrors this behavior and auto-advances, but you can override the display in the sidebar without changing the logger (restart the logger to switch feeds).
+By default, the logger tracks the **current 15-minute market** (`--market-type btc_15m`): the contract that expires at the next 15-minute boundary. You can switch to 5-minute markets with `--market-type btc_5m`. The GUI mirrors logger behavior and auto-advances, but you can override the display in the sidebar without changing the logger (restart the logger to switch feeds).
+
+## Migration note
+Older versions wrote daily CSV files at the repository root (for example, `24032025.csv`). Current versions store files under market-type folders:
+
+- `data/15min/DDMMYYYY.csv`
+- `data/5min/DDMMYYYY.csv`
 
 ## FAQ
 **Why does the GUI say “Waiting for updates”?**  
@@ -199,7 +221,9 @@ PolymarketAnalyst/
 ├── websocket_logger.py          # WebSocket logging client
 ├── .gitignore                   # Specifies intentionally untracked files to ignore
 ├── README.md                    # This file
-└── *.csv                         # Daily historical data (auto-generated and used by the GUI)
+└── data/
+    ├── 15min/                    # Daily 15-minute market data (DDMMYYYY.csv)
+    └── 5min/                     # Daily 5-minute market data (DDMMYYYY.csv)
 ```
 
 ## Contributing
