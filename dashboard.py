@@ -1462,7 +1462,8 @@ def prepare_probability_window(
     time_column,
     lookback_period,
     resample_interval,
-    jump_container,
+    jump_container=None,
+    enable_jump_controls=True,
 ):
     if "TargetTime_dt" not in df.columns and "TargetTime" in df.columns:
         df = df.copy()
@@ -1484,18 +1485,19 @@ def prepare_probability_window(
     if pd.isna(jump_default):
         jump_default = df[time_column].max()
 
-    jump_time = jump_container.datetime_input(
-        "Jump to time",
-        value=jump_default,
-        help=f"Jump to the {window_size}-market window that includes this time.",
-    )
-    if jump_container.button("Jump", key="window_jump_button") and total_markets:
-        eligible_times = [t for t in target_times if t and t <= jump_time]
-        if eligible_times:
-            target_index = target_times.index(eligible_times[-1])
-        else:
-            target_index = 0
-        st.session_state.window_offset = max(0, total_markets - (target_index + 1))
+    if enable_jump_controls and jump_container is not None:
+        jump_time = jump_container.datetime_input(
+            "Jump to time",
+            value=jump_default,
+            help=f"Jump to the {window_size}-market window that includes this time.",
+        )
+        if jump_container.button("Jump", key="window_jump_button") and total_markets:
+            eligible_times = [t for t in target_times if t and t <= jump_time]
+            if eligible_times:
+                target_index = target_times.index(eligible_times[-1])
+            else:
+                target_index = 0
+            st.session_state.window_offset = max(0, total_markets - (target_index + 1))
 
     if total_markets:
         window_end = total_markets - st.session_state.window_offset
@@ -2903,7 +2905,7 @@ def render_dashboard():
                     time_column,
                     lookback_period,
                     resample_interval,
-                    jump_container,
+                    enable_jump_controls=False,
                 )
                 latest_chart_result = _render_probability_chart(latest_df, latest_window)
                 st.caption(f"Last updated: {latest_chart_result['latest']['Timestamp']}")
