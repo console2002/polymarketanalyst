@@ -93,11 +93,7 @@ def _get_data_file(timestamp_dt, active_profile):
         profile=active_profile if not isinstance(active_profile, str) else None,
         profile_key=active_profile if isinstance(active_profile, str) else None,
     )
-    profile_data_subdirs = {
-        "btc_15m": "15min",
-        "btc_5m": "5min",
-    }
-    data_subdir = profile_data_subdirs.get(profile.key, profile.data_subdir)
+    data_subdir = profile.data_subdir
 
     date_str = timestamp_dt.astimezone(TIMEZONE_ET).strftime(DATE_FORMAT)
     data_dir = os.path.join(SCRIPT_DIR, "data", data_subdir)
