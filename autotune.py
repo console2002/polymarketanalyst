@@ -263,3 +263,155 @@ def run_coarse_autotune(
                                 os.fsync(handle.fileno())
 
     return results
+
+
+def count_valid_parameter_combinations_for_pairs(
+    minutes_entry_pairs,
+    hold_until_close_threshold_range,
+    second_entry_threshold_range,
+    modes,
+):
+    pair_values = list(minutes_entry_pairs)
+    hold_values = list(hold_until_close_threshold_range)
+    second_entry_values = list(second_entry_threshold_range)
+    mode_values = list(modes)
+    count = 0
+    for _, entry_value in pair_values:
+        valid_hold_values = [hold_value for hold_value in hold_values if hold_value >= entry_value]
+        count += len(valid_hold_values) * len(second_entry_values) * len(mode_values)
+    return count
+
+
+def run_coarse_autotune_for_pairs(
+    df,
+    time_column,
+    calculate_metrics,
+    minutes_entry_pairs,
+    hold_until_close_threshold_range=np.arange(0.52, 0.851, 0.05),
+    second_entry_threshold_range=np.arange(0.40, 0.801, 0.05),
+    modes=("additive", "sole"),
+    progress_callback=None,
+    save_path=None,
+    run_id=None,
+    incremental_save=False,
+    min_total_count=0,
+):
+    results = []
+    pair_values = [
+        (float(minutes_value), round(float(entry_value), 2))
+        for minutes_value, entry_value in minutes_entry_pairs
+    ]
+    hold_values = list(hold_until_close_threshold_range)
+    second_entry_values = list(second_entry_threshold_range)
+    mode_values = list(modes)
+    total_steps = count_valid_parameter_combinations_for_pairs(
+        pair_values,
+        hold_values,
+        second_entry_values,
+        mode_values,
+    )
+    completed_steps = 0
+
+    for minutes_value, entry_value in pair_values:
+        for hold_value in hold_values:
+            if hold_value < entry_value:
+                completed_steps += len(second_entry_values) * len(mode_values)
+                continue
+            for second_entry_value in second_entry_values:
+                for mode in mode_values:
+                    completed_steps += 1
+                    if progress_callback:
+                        progress_callback(
+                            completed_steps,
+                            total_steps,
+                            (
+                                "Evaluating "
+                                f"minutes_after_open={minutes_value}, "
+                                f"entry_threshold={entry_value:.2f}, "
+                                f"hold_until_close_threshold={hold_value:.2f}, "
+                                f"second_entry_threshold={second_entry_value:.2f}, "
+                                f"mode={mode}"
+                            ),
+                        )
+                    metrics = calculate_metrics(
+                        df,
+                        time_column,
+                        minutes_value,
+                        entry_value,
+                        round(float(hold_value), 2),
+                        mode,
+                        round(float(second_entry_value), 2),
+                    )
+                    if isinstance(metrics, dict):
+                        strike = metrics.get("strike_rate", metrics.get("strike"))
+                        win_rate = metrics.get(
+                            "win_rate_needed",
+                            metrics.get("win_rate"),
+                        )
+                        total_count = metrics.get(
+                            "total_count",
+                            metrics.get("sample_size", metrics.get("count")),
+                        )
+                        expectancy = metrics.get("expectancy")
+                        expected_pnl = metrics.get("expected_pnl")
+                        if (
+                            expected_pnl is None
+                            and expectancy is not None
+                            and total_count not in {0, None}
+                            and not pd.isna(total_count)
+                        ):
+                            expected_pnl = expectancy * total_count
+                    else:
+                        metrics_values = list(metrics)
+                        strike = metrics_values[0] if metrics_values else None
+                        win_rate = metrics_values[-2] if len(metrics_values) >= 2 else None
+                        total_count = metrics_values[-1] if len(metrics_values) >= 1 else None
+                        expectancy = None
+                        expected_pnl = None
+                    edge = (
+                        strike - win_rate
+                        if strike is not None
+                        and win_rate is not None
+                        and not pd.isna(strike)
+                        and not pd.isna(win_rate)
+                        else np.nan
+                    )
+                    row = {
+                        "run_id": run_id,
+                        "minutes_after_open": minutes_value,
+                        "entry_threshold": entry_value,
+                        "hold_until_close_threshold": round(float(hold_value), 2),
+                        "second_entry_threshold": round(float(second_entry_value), 2),
+                        "second_entry_mode": mode,
+                        "strike_rate": strike,
+                        "win_rate_needed": win_rate,
+                        "edge": edge,
+                        "expectancy": expectancy,
+                        "expected_pnl": expected_pnl,
+                        "total_count": total_count,
+                    }
+                    if (
+                        min_total_count
+                        and (
+                            total_count in {None, 0}
+                            or pd.isna(total_count)
+                            or float(total_count) < float(min_total_count)
+                        )
+                    ):
+                        row["edge"] = np.nan
+                        row["expectancy"] = np.nan
+                        row["expected_pnl"] = np.nan
+                    results.append(row)
+                    if incremental_save and save_path:
+                        header_needed = not os.path.exists(save_path) or os.path.getsize(save_path) == 0
+                        with open(save_path, "a", newline="") as handle:
+                            pd.DataFrame([row]).to_csv(
+                                handle,
+                                mode="a",
+                                header=header_needed,
+                                index=False,
+                            )
+                            handle.flush()
+                            os.fsync(handle.fileno())
+
+    return results
