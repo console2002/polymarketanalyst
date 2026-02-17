@@ -43,7 +43,7 @@ def test_primary_processing_holds_to_market_close_when_entry_is_at_or_above_hold
     assert record["exit_time"] == pd.Timestamp("2024-01-01 00:15:00")
 
 
-def test_primary_processing_uses_threshold_exit_when_entry_is_below_hold_threshold():
+def test_primary_processing_always_holds_to_market_close_after_entry():
     df = _build_market_df([0.50, 0.62, 0.66, 0.40])
 
     records = calculate_market_trade_records(
@@ -57,8 +57,8 @@ def test_primary_processing_uses_threshold_exit_when_entry_is_below_hold_thresho
 
     record = records[0]
     assert record["entry_price"] == 0.62
-    assert record["exit_reason"] == "threshold"
-    assert record["exit_time"] == pd.Timestamp("2024-01-01 00:10:00")
+    assert record["exit_reason"] == "held_to_close"
+    assert record["exit_time"] == pd.Timestamp("2024-01-01 00:15:00")
 
 
 def test_second_entry_processing_holds_to_market_close_when_entry_is_at_or_above_hold_threshold():
