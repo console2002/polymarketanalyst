@@ -189,9 +189,9 @@ The logger writes to one CSV file per day using the US/Eastern date (format `DDM
 - 5-minute market rotation path: `data/5min/DDMMYYYY.csv`
 
 ## Default market selection
-The logger uses the **default market profile `btc_15m`** when `--market-type` is omitted. In this mode it tracks the contract that expires at the next 15-minute boundary.
+The logger uses the **default market profile `btc_15m`** when `--market-type` is omitted for backward-compatible behavior. In this mode it tracks the contract that expires at the next profile window boundary (15m by default).
 
-To override the default, pass `--market-type btc_5m` (or explicitly pass `--market-type btc_15m`). The GUI mirrors the logger's active feed and auto-advances for that profile; you can also change GUI display filters in the sidebar without changing logger ingestion (restart the logger to switch feeds).
+To run a different window, pass `--market-type btc_5m` (or explicitly keep `--market-type btc_15m`). The GUI mirrors the logger's active feed and auto-advances for that profile; you can also change GUI display filters in the sidebar without changing logger ingestion (restart the logger to switch feeds).
 
 ## Migration note
 Older versions wrote daily CSV files at the repository root (for example, `24032025.csv`). Current versions store files under market-type folders:
@@ -208,10 +208,10 @@ If the stream pauses or Polymarket stops sending updates, the logger flags the r
 
 ## How It Works
 
-The system identifies the **Active Market** for the selected profile (`btc_15m` or `btc_5m`) by finding the current interval that has started but not yet expired:
+The system identifies the **Active Market** for the selected profile (`btc_15m` or `btc_5m`) by finding the current profile window that has started but not yet expired:
 
-- **Start Time**: Beginning of the active profile candle (15-minute or 5-minute)
-- **Expiration**: End of that same profile candle  
+- **Start Time**: Beginning of the active profile window (for example, 5m or 15m)
+- **Expiration**: End of that same profile window  
 - **Contract Prices**: Live "Yes" (Up) and "No" (Down) prices from Polymarket's CLOB
 
 Contracts pay out based on whether the price at **Expiration** is higher ("Up") or lower ("Down") than the **Strike Price**.

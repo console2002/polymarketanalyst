@@ -20,9 +20,10 @@ def _resolve_profile_key(profile_key=None, market_type=None):
 
 def get_current_market_urls(profile_key=None, market_type=None):
     """
-    Returns a dictionary with the current active market URL for Polymarket.
-    'Current' is defined as the market starting at the current profile interval
-    (for example, 5m or 15m depending on ``profile_key``).
+    Returns metadata for the current active Polymarket URL.
+
+    'Current' is the market starting at the active profile boundary
+    (for example, 5m for ``btc_5m`` or 15m for ``btc_15m``).
     """
     profile = get_market_profile(_resolve_profile_key(profile_key=profile_key, market_type=market_type))
     now = datetime.datetime.now(pytz.utc)
@@ -50,8 +51,10 @@ def get_current_market_urls(profile_key=None, market_type=None):
 
 def get_available_market_urls(num_markets=12, profile_key=None, market_type=None):
     """
-    Returns a list of upcoming Polymarket URLs starting from the current market
-    using the selected profile cadence (e.g. 5m/15m).
+    Returns upcoming Polymarket URLs from the current market boundary.
+
+    The spacing between markets follows the selected profile window
+    (operator-facing examples: 5m and 15m).
     """
     profile = get_market_profile(_resolve_profile_key(profile_key=profile_key, market_type=market_type))
     current_market = get_current_market_urls(profile_key=profile.key)

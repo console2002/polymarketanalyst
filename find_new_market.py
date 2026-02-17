@@ -77,9 +77,10 @@ def generate_market_url_for_profile(target_time, profile):
 
 def generate_market_url(target_time, profile_key=None):
     """
-    Generates the full Polymarket URL for a given datetime.
-    Detects if it should be an hourly or 15-minute market based on minutes?
-    Actually, let's switch entirely to 15m markets as requested.
+    Generate the full Polymarket URL for a given datetime and market profile.
+
+    Defaults to ``default_market_profile_key()`` for compatibility (currently
+    ``btc_15m``), but callers can pass any configured profile key.
     """
     selected_profile_key = profile_key or default_market_profile_key()
     profile = _market_profile(selected_profile_key)
@@ -87,25 +88,28 @@ def generate_market_url(target_time, profile_key=None):
 
 def get_next_market_urls(num_hours=5, profile_key=None, cadence_minutes=None):
     """
-    Generates URLs for the next 'num_hours' 15-minute markets.
+    Generate URLs for the next ``num_hours`` worth of profile windows.
+
+    By default this uses the selected profile cadence (for example 5m or 15m).
+    ``cadence_minutes`` can override the profile cadence when needed.
     """
     profile = _market_profile(profile_key)
     urls = []
     now = datetime.datetime.now(pytz.utc)
     
-    # Start from the current 15-minute interval start.
-    # Example: 12:07 -> 12:00 start
-    # Example: 12:14 -> 12:00 start
+    # Start from the current window boundary for the selected cadence.
+    # Example (15m): 12:07 -> 12:00 start
+    # Example (5m):  12:07 -> 12:05 start
     
     base_time = now.replace(second=0, microsecond=0)
     minutes = base_time.minute
     cadence = cadence_minutes or profile.window_minutes
     remainder = minutes % cadence
-    current_quarter = base_time - datetime.timedelta(minutes=remainder)
+    current_window_start = base_time - datetime.timedelta(minutes=remainder)
 
     windows_per_hour = int(60 / cadence)
     for i in range(num_hours * windows_per_hour): # Fetch enough for X hours
-        target_time = current_quarter + datetime.timedelta(minutes=cadence * i)
+        target_time = current_window_start + datetime.timedelta(minutes=cadence * i)
         urls.append(generate_market_url(target_time, profile_key=profile.key))
         
     return urls
@@ -113,18 +117,18 @@ def get_next_market_urls(num_hours=5, profile_key=None, cadence_minutes=None):
 def get_current_market_url(profile_key=None, cadence_minutes=None):
     """
     Determines the URL for the 'current' necessary market.
-    Logic: The current 15-min market start.
+    Logic: the current profile window start (for example 5m or 15m).
     """
     profile = _market_profile(profile_key)
     now = datetime.datetime.now(pytz.utc)
     
-    # Calculate current 15-minute interval start
+    # Calculate current interval start for the active cadence/profile.
     base_time = now.replace(second=0, microsecond=0)
     minutes = base_time.minute
     cadence = cadence_minutes or profile.window_minutes
     remainder = minutes % cadence
-    current_quarter = base_time - datetime.timedelta(minutes=remainder)
-    return generate_market_url(current_quarter, profile_key=profile.key)
+    current_window_start = base_time - datetime.timedelta(minutes=remainder)
+    return generate_market_url(current_window_start, profile_key=profile.key)
 
 def generate_urls_until_year_end():
     """
