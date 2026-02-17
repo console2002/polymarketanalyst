@@ -11,6 +11,8 @@ _MARKET_TYPE_TO_PROFILE_KEY = {
 
 
 def _resolve_profile_key(profile_key=None, market_type=None):
+    """Resolve profile selection, defaulting to ``btc_15m`` semantics."""
+
     if profile_key:
         return profile_key
     if market_type:
@@ -20,10 +22,11 @@ def _resolve_profile_key(profile_key=None, market_type=None):
 
 def get_current_market_urls(profile_key=None, market_type=None):
     """
-    Returns metadata for the current active Polymarket URL.
+    Return metadata for the current active profile-window market URL.
 
-    'Current' is the market starting at the active profile boundary
-    (for example, 5m for ``btc_5m`` or 15m for ``btc_15m``).
+    'Current' is the market starting at the selected profile boundary. If no
+    profile override is supplied, this uses ``default_market_profile_key()``
+    (currently ``btc_15m``).
     """
     profile = get_market_profile(_resolve_profile_key(profile_key=profile_key, market_type=market_type))
     now = datetime.datetime.now(pytz.utc)
@@ -51,10 +54,11 @@ def get_current_market_urls(profile_key=None, market_type=None):
 
 def get_available_market_urls(num_markets=12, profile_key=None, market_type=None):
     """
-    Returns upcoming Polymarket URLs from the current market boundary.
+    Return upcoming Polymarket URLs from the current market boundary.
 
-    The spacing between markets follows the selected profile window
-    (operator-facing examples: 5m and 15m).
+    The spacing between markets follows the selected profile window size. If
+    no profile override is supplied, this uses ``default_market_profile_key()``
+    (currently ``btc_15m``).
     """
     profile = get_market_profile(_resolve_profile_key(profile_key=profile_key, market_type=market_type))
     current_market = get_current_market_urls(profile_key=profile.key)

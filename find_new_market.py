@@ -6,9 +6,24 @@ from market_profiles import default_market_profile_key, get_market_profile
 # Base URL for Polymarket events
 BASE_URL = "https://polymarket.com/event/"
 
+_MARKET_TYPE_TO_PROFILE_KEY = {
+    "15m": "btc_15m",
+    "5m": "btc_5m",
+}
 
-def _market_profile(profile_key=None):
-    selected_key = profile_key or default_market_profile_key()
+
+def _resolve_profile_key(profile_key=None, market_type=None):
+    """Resolve CLI-style market type aliases to a concrete profile key."""
+
+    if profile_key:
+        return profile_key
+    if market_type:
+        return _MARKET_TYPE_TO_PROFILE_KEY.get(market_type, market_type)
+    return default_market_profile_key()
+
+
+def _market_profile(profile_key=None, market_type=None):
+    selected_key = _resolve_profile_key(profile_key=profile_key, market_type=market_type)
     return get_market_profile(selected_key)
 
 
@@ -52,13 +67,13 @@ def generate_interval_slug(target_time, slug_prefix):
     return f"{slug_prefix}-{timestamp}"
 
 
-def generate_profile_slug(target_time, profile_key=None):
+def generate_profile_slug(target_time, profile_key=None, market_type=None):
     """
     Generates the Polymarket event slug for a configured market profile.
     Format: <slug_prefix>-[TIMESTAMP]
     The timestamp is the market start time (Unix timestamp).
     """
-    profile = _market_profile(profile_key)
+    profile = _market_profile(profile_key=profile_key, market_type=market_type)
 
     return generate_interval_slug(target_time, profile.slug_prefix)
 
@@ -75,31 +90,30 @@ def generate_market_url_for_profile(target_time, profile):
     return f"{BASE_URL}{slug}"
 
 
-def generate_market_url(target_time, profile_key=None):
+def generate_market_url(target_time, profile_key=None, market_type=None):
     """
     Generate the full Polymarket URL for a given datetime and market profile.
 
-    Defaults to ``default_market_profile_key()`` for compatibility (currently
-    ``btc_15m``), but callers can pass any configured profile key.
+    Defaults to ``default_market_profile_key()`` (currently ``btc_15m``), and
+    accepts either ``profile_key`` or the CLI-style ``market_type`` alias.
     """
-    selected_profile_key = profile_key or default_market_profile_key()
-    profile = _market_profile(selected_profile_key)
+    profile = _market_profile(profile_key=profile_key, market_type=market_type)
     return generate_market_url_for_profile(target_time, profile)
 
-def get_next_market_urls(num_hours=5, profile_key=None, cadence_minutes=None):
+def get_next_market_urls(num_hours=5, profile_key=None, market_type=None, cadence_minutes=None):
     """
     Generate URLs for the next ``num_hours`` worth of profile windows.
 
-    By default this uses the selected profile cadence (for example 5m or 15m).
-    ``cadence_minutes`` can override the profile cadence when needed.
+    By default this uses the selected profile window cadence.
+    ``cadence_minutes`` can override the profile window size when needed.
+    If no profile is supplied, the default profile is used (currently
+    ``btc_15m``).
     """
-    profile = _market_profile(profile_key)
+    profile = _market_profile(profile_key=profile_key, market_type=market_type)
     urls = []
     now = datetime.datetime.now(pytz.utc)
     
     # Start from the current window boundary for the selected cadence.
-    # Example (15m): 12:07 -> 12:00 start
-    # Example (5m):  12:07 -> 12:05 start
     
     base_time = now.replace(second=0, microsecond=0)
     minutes = base_time.minute
@@ -114,12 +128,14 @@ def get_next_market_urls(num_hours=5, profile_key=None, cadence_minutes=None):
         
     return urls
 
-def get_current_market_url(profile_key=None, cadence_minutes=None):
+def get_current_market_url(profile_key=None, market_type=None, cadence_minutes=None):
     """
-    Determines the URL for the 'current' necessary market.
-    Logic: the current profile window start (for example 5m or 15m).
+    Determine the URL for the current profile window start.
+
+    Defaults to ``btc_15m`` via ``default_market_profile_key()`` unless a
+    ``profile_key``/``market_type`` override is supplied.
     """
-    profile = _market_profile(profile_key)
+    profile = _market_profile(profile_key=profile_key, market_type=market_type)
     now = datetime.datetime.now(pytz.utc)
     
     # Calculate current interval start for the active cadence/profile.
@@ -132,7 +148,10 @@ def get_current_market_url(profile_key=None, cadence_minutes=None):
 
 def generate_urls_until_year_end():
     """
-    Generates URLs for every hour from now until Jan 1, 2026.
+    Generates hourly-start URLs from now until Jan 1, 2026.
+
+    Uses the default profile (currently ``btc_15m``) unless explicitly
+    overridden.
     Saves them to 'market_urls_2025.txt'.
     """
     urls = []
