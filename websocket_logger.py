@@ -195,12 +195,17 @@ class PolymarketWebsocketLogger:
         self.last_heartbeat = None
         self.clob_frames_received = 0
         self._shutdown = asyncio.Event()
+        self._active_ws = None
 
     async def run(self):
         await self._run_clob_socket()
 
     async def shutdown(self):
         self._shutdown.set()
+        ws = self._active_ws
+        if ws is not None:
+            with contextlib.suppress(Exception):
+                await ws.close()
 
     async def _run_clob_socket(self):
         backoff = 1
@@ -212,6 +217,7 @@ class PolymarketWebsocketLogger:
                     ping_interval=None,
                     max_queue=None,
                 ) as ws:
+                    self._active_ws = ws
                     print("CLOB connected")
                     await self._subscribe_clob(ws)
                     heartbeat = asyncio.create_task(self._clob_heartbeat(ws))
@@ -220,6 +226,7 @@ class PolymarketWebsocketLogger:
                         async for message in ws:
                             await self._handle_clob_message(message)
                     finally:
+                        self._active_ws = None
                         heartbeat.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await heartbeat

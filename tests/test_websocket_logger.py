@@ -97,3 +97,28 @@ def test_subscribe_payload_uses_assets_ids_and_market_type():
     assert len(ws.sent) == 1
     payload = json.loads(ws.sent[0])
     assert payload == {"assets_ids": ["1", "2"], "type": "market"}
+
+
+def test_shutdown_closes_active_websocket():
+    class FakeWebSocket:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    async def on_price_update(payload):
+        return payload
+
+    logger = websocket_logger.PolymarketWebsocketLogger(
+        _sample_market_info(), on_price_update
+    )
+    ws = FakeWebSocket()
+    logger._active_ws = ws
+
+    async def run():
+        await logger.shutdown()
+
+    asyncio.run(run())
+    assert logger._shutdown.is_set()
+    assert ws.closed is True
