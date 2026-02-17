@@ -682,6 +682,34 @@ def _select_best_coarse_result(results_df, objective):
     best_row = filtered_df.loc[filtered_df[score_column].idxmax()]
     return best_row.to_dict()
 
+
+def _format_optimization_candidate_summary(result, selected_cadence):
+    if not result:
+        return "N/A"
+    minutes_value_display = _format_minutes_for_ui(result.get("minutes_after_open"), selected_cadence)
+    entry_threshold = result.get("entry_threshold")
+    hold_threshold = result.get("hold_until_close_threshold")
+    second_entry_threshold = result.get("second_entry_threshold")
+    expected_pnl = result.get("expected_pnl")
+    total_count = result.get("total_count")
+    second_entry_mode = result.get("second_entry_mode", "off")
+    entry_threshold_display = f"{entry_threshold:.2f}" if pd.notna(entry_threshold) else "N/A"
+    hold_threshold_display = f"{hold_threshold:.2f}" if pd.notna(hold_threshold) else "N/A"
+    second_entry_threshold_display = (
+        f"{second_entry_threshold:.2f}" if pd.notna(second_entry_threshold) else "N/A"
+    )
+    expected_pnl_display = f"{expected_pnl:.2f}" if pd.notna(expected_pnl) else "N/A"
+    samples_display = int(total_count) if pd.notna(total_count) else 0
+    return (
+        f"minutes_after_open={minutes_value_display}, "
+        f"entry_threshold={entry_threshold_display}, "
+        f"hold_until_close_threshold={hold_threshold_display}, "
+        f"second_entry_threshold={second_entry_threshold_display}, "
+        f"second_entry_mode={second_entry_mode}, "
+        f"expected_pnl={expected_pnl_display}, "
+        f"samples={samples_display}"
+    )
+
 def _normalize_second_entry_mode(mode):
     if not mode:
         return "off"
@@ -2243,9 +2271,15 @@ def render_strike_rate_section(
                     phase1_eligible_df = phase1_df[phase1_df["total_count"] >= min_total_count]
                     phase1_candidates_df = phase1_eligible_df if not phase1_eligible_df.empty else phase1_df
                     if phase1_eligible_df.empty:
+                        top_phase1_fallback = _select_best_coarse_result(phase1_df, "expected_pnl")
+                        fallback_summary = _format_optimization_candidate_summary(
+                            top_phase1_fallback,
+                            selected_cadence,
+                        )
                         notice = (
                             f"No phase-1 candidates met minimum sample count ({min_total_count}). "
-                            "Proceeding with lower-sample candidates."
+                            "Proceeding with lower-sample candidates. "
+                            f"Top fallback phase-1 candidate: {fallback_summary}"
                         )
                         st.session_state.optimization_notice = notice
                         _append_optimization_log(notice, optimization_log_placeholder)
@@ -2312,9 +2346,15 @@ def render_strike_rate_section(
                     eligible_results_df = results_df[results_df["total_count"] >= min_total_count]
                     final_results_df = eligible_results_df if not eligible_results_df.empty else results_df
                     if eligible_results_df.empty and not results_df.empty:
+                        top_phase2_fallback = _select_best_coarse_result(results_df, "expected_pnl")
+                        fallback_summary = _format_optimization_candidate_summary(
+                            top_phase2_fallback,
+                            selected_cadence,
+                        )
                         notice = (
                             f"No phase-2 candidates met minimum sample count ({min_total_count}). "
-                            "Showing best lower-sample result."
+                            "Showing best lower-sample result. "
+                            f"Top fallback phase-2 candidate: {fallback_summary}"
                         )
                         st.session_state.optimization_notice = notice
                         _append_optimization_log(notice, optimization_log_placeholder)
