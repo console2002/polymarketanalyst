@@ -28,8 +28,8 @@ TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
 EXPECTED_MARKET_CADENCE_MINUTES = 15
 CADENCE_OPTIONS = {
-    "5min": 5,
     "15min": 15,
+    "5min": 5,
 }
 CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache", "second_entry")
 CACHE_SCHEMA_VERSION = 2
@@ -312,7 +312,7 @@ def _load_data_file(data_file, expected_cadence_minutes):
     return df
 
 
-def load_data(selected_date, files_by_date, legacy_path, expected_cadence_minutes):
+def load_data(selected_date, files_by_date, legacy_path, expected_cadence_minutes, cadence_key):
     warnings = []
     try:
         data_file, resolved_date = _resolve_data_file(selected_date, files_by_date, legacy_path)
@@ -324,7 +324,8 @@ def load_data(selected_date, files_by_date, legacy_path, expected_cadence_minute
         if not cadence_ok:
             warning = (
                 f"Skipping {os.path.basename(data_file)}: detected {detected_cadence}m cadence, "
-                f"dashboard currently supports {expected_cadence_minutes}m cadence only."
+                f"dashboard currently supports {expected_cadence_minutes}m cadence only "
+                f"(selected cadence: {cadence_key})."
             )
             warnings.append(warning)
             logging.warning(warning)
@@ -372,7 +373,7 @@ def _load_all_data_cached(file_signatures, expected_cadence_minutes):
     return pd.concat(data_frames, ignore_index=True), tuple(warnings)
 
 
-def load_all_data(files_by_date, legacy_path, expected_cadence_minutes):
+def load_all_data(files_by_date, legacy_path, expected_cadence_minutes, cadence_key):
     file_signatures = []
     for _, data_file in sorted(files_by_date.items()):
         signature = _get_file_signature(data_file)
@@ -385,6 +386,7 @@ def load_all_data(files_by_date, legacy_path, expected_cadence_minutes):
     if not file_signatures:
         return None, []
     df, warnings = _load_all_data_cached(tuple(file_signatures), expected_cadence_minutes)
+    warnings = [f"[{cadence_key}] {warning}" for warning in warnings]
     if df is not None:
         df.attrs["data_signature"] = tuple(file_signatures)
     return df, list(warnings)
@@ -2561,23 +2563,29 @@ def render_second_entry_summary(summary_state):
 
 def render_dashboard():
     cadence_key = st.sidebar.selectbox(
-        "Data cadence",
+        "Market cadence",
         options=tuple(CADENCE_OPTIONS.keys()),
         index=tuple(CADENCE_OPTIONS.values()).index(EXPECTED_MARKET_CADENCE_MINUTES),
         help="Choose which cadence folder to load dated CSV files from.",
     )
     expected_cadence_minutes = CADENCE_OPTIONS[cadence_key]
+
+    selected_date_state_key = f"selected_date_{cadence_key}"
     files_by_date, legacy_path = _get_available_data_files_for_cadence(cadence_key)
     available_dates = sorted(files_by_date)
     latest_available_date = max(available_dates) if available_dates else None
     min_available_date = min(available_dates) if available_dates else None
 
     if available_dates:
+        default_selected_date = st.session_state.get(selected_date_state_key, latest_available_date)
+        if default_selected_date not in available_dates:
+            default_selected_date = latest_available_date
         selected_date = st.sidebar.date_input(
             "Data date",
-            value=latest_available_date,
+            value=default_selected_date,
             min_value=min_available_date,
             max_value=latest_available_date,
+            key=selected_date_state_key,
             help="Select a historical data file by date. Defaults to the latest available file.",
         )
     else:
@@ -2591,11 +2599,11 @@ def render_dashboard():
     progress_bar = progress_container.progress(0, text="Loading data files…")
 
     df, resolved_date, load_warnings = load_data(
-        selected_date, files_by_date, legacy_path, expected_cadence_minutes
+        selected_date, files_by_date, legacy_path, expected_cadence_minutes, cadence_key
     )
     progress_bar.progress(0.25, text="Loaded selected data file.")
     history_df, history_warnings = load_all_data(
-        files_by_date, legacy_path, expected_cadence_minutes
+        files_by_date, legacy_path, expected_cadence_minutes, cadence_key
     )
     progress_bar.progress(0.45, text="Loaded historical data.")
     if history_df is None or history_df.empty:
