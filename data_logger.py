@@ -62,6 +62,7 @@ CSV_HEADERS = [
     "is_stale",
     "stale_age_seconds",
 ]
+MARKET_TYPE_CHOICES = ["btc_15m", "btc_5m"]
 
 
 def _format_timestamp(value, timezone):
@@ -807,7 +808,7 @@ def main():
     )
     parser.add_argument(
         "--market-type",
-        choices=["btc_15m", "btc_5m"],
+        choices=MARKET_TYPE_CHOICES,
         default=default_market_profile_key(),
         help="Market profile to track (default: btc_15m).",
     )
@@ -853,7 +854,13 @@ def main():
         print(message)
         sys.exit(0 if ok else 1)
 
-    print("Starting Data Logger...")
+    try:
+        selected_profile = get_market_profile(args.market_type)
+    except ValueError as exc:
+        print(f"Invalid --market-type '{args.market_type}': {exc}")
+        sys.exit(2)
+
+    print(f"Starting Data Logger... market_type={selected_profile.key}")
     broadcaster = None
     if args.ui_stream:
         broadcaster = LoggerStreamBroadcaster(
@@ -862,7 +869,7 @@ def main():
             port_fallback_attempts=args.ui_stream_port_fallbacks,
         )
     try:
-        asyncio.run(_run_with_signals(args.market_type, broadcaster))
+        asyncio.run(_run_with_signals(selected_profile.key, broadcaster))
     except KeyboardInterrupt:
         print("\nStopping logger...")
 
