@@ -11,8 +11,7 @@ from plotly.subplots import make_subplots
 import datetime
 import re
 import uuid
-from autotune import run_autotune, run_coarse_autotune
-from second_entry_autotune import run_second_entry_autotune
+from autotune import run_coarse_autotune
 from dashboard_metrics import (
     build_trade_pnl_records,
     summarize_drawdowns,
@@ -69,13 +68,13 @@ def _get_cadence_autotune_config(cadence_key):
             "minutes_after_open_min": 0.5,
             "minutes_after_open_max": 4.5,
             "minutes_after_open_default": 2.0,
-            "minutes_after_open_step": 0.5,
-            "minutes_after_open_help": "5min cadence: choose 30-second increments from 0:30 to 4:30 after market open.",
+            "minutes_after_open_step": 1 / 12,
+            "minutes_after_open_help": "5min cadence: choose 5-second increments from 0:30 to 4:30 after market open.",
             "coarse_minutes_min": 0.5,
             "coarse_minutes_max": 4.5,
             "coarse_minutes_default": (0.5, 4.5),
-            "coarse_minutes_step": 0.5,
-            "coarse_minutes_format": "%.1f",
+            "coarse_minutes_step": 1 / 12,
+            "coarse_minutes_format": "%.3f",
         },
     }
     config = base_config.get(cadence_key, base_config[DEFAULT_CADENCE_KEY]).copy()
@@ -600,45 +599,6 @@ def _format_metric(value, formatter):
         return "N/A"
 
 
-def _build_second_entry_autotune_panel(results):
-    if not results:
-        return []
-    rows = []
-    for mode_label in ("additive", "sole"):
-        result = results.get(mode_label)
-        if not result:
-            continue
-        rows.append(
-            {
-                "Mode": mode_label.title(),
-                "Best 2nd Threshold": _format_metric(
-                    result.get("second_entry_threshold"),
-                    lambda v: f"{v:.3f}",
-                ),
-                "Strike Rate": _format_metric(
-                    result.get("strike_rate"),
-                    lambda v: f"{v:.2f}%",
-                ),
-                "Win Rate Needed": _format_metric(
-                    result.get("win_rate_needed"),
-                    lambda v: f"{v:.2f}%",
-                ),
-                "Edge": _format_metric(
-                    result.get("edge"),
-                    lambda v: f"{v:+.2f}%",
-                ),
-                "Trades": _format_metric(
-                    result.get("trade_count"),
-                    lambda v: f"{int(v)}",
-                ),
-                "Expectancy": _format_metric(
-                    result.get("expectancy"),
-                    lambda v: f"{v:.4f}",
-                ),
-            }
-        )
-    return rows
-
 def _default_coarse_autotune_filename():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"coarse_autotune_{timestamp}.csv"
@@ -1099,20 +1059,10 @@ def _initialize_strike_rate_state(
         st.session_state.last_second_entry_mode = _normalize_second_entry_mode(second_entry_mode)
     if "last_second_entry_threshold" not in st.session_state:
         st.session_state.last_second_entry_threshold = second_entry_threshold
-    if "autotune_result" not in st.session_state:
-        st.session_state.autotune_result = None
-    if "autotune_message" not in st.session_state:
-        st.session_state.autotune_message = None
-    if "coarse_autotune_result" not in st.session_state:
-        st.session_state.coarse_autotune_result = None
-    if "coarse_autotune_message" not in st.session_state:
-        st.session_state.coarse_autotune_message = None
-    if "second_entry_autotune_result" not in st.session_state:
-        st.session_state.second_entry_autotune_result = None
-    if "second_entry_autotune_message" not in st.session_state:
-        st.session_state.second_entry_autotune_message = None
-    if "second_entry_autotune_panel" not in st.session_state:
-        st.session_state.second_entry_autotune_panel = None
+    if "optimization_result" not in st.session_state:
+        st.session_state.optimization_result = None
+    if "optimization_message" not in st.session_state:
+        st.session_state.optimization_message = None
     if "strike_sample_size" not in st.session_state:
         st.session_state.strike_sample_size = None
     if "autotune_sample_size" not in st.session_state:
@@ -1121,12 +1071,8 @@ def _initialize_strike_rate_state(
         st.session_state.coarse_autotune_results_df = None
     if "coarse_autotune_save_path" not in st.session_state:
         st.session_state.coarse_autotune_save_path = _default_coarse_autotune_filename()
-    if "coarse_autotune_load_path" not in st.session_state:
-        st.session_state.coarse_autotune_load_path = ""
     if "coarse_autotune_save_enabled" not in st.session_state:
         st.session_state.coarse_autotune_save_enabled = False
-    if "coarse_autotune_load_enabled" not in st.session_state:
-        st.session_state.coarse_autotune_load_enabled = False
 
 
 def _should_recalculate_strike_rate(
@@ -2029,8 +1975,6 @@ def render_strike_rate_section(
     gauge_value = max(50, min(100, gauge_value))
     win_rate_needed_pct = 50 if pd.isna(win_rate_needed) else win_rate_needed
     win_rate_needed_pct = max(50, min(100, win_rate_needed_pct))
-    green_end = win_rate_needed_pct
-    red_start = win_rate_needed_pct
     gauge_fig = go.Figure(
         go.Indicator(
             mode="gauge+number",
@@ -2042,8 +1986,8 @@ def render_strike_rate_section(
                 "axis": {"range": [50, 100]},
                 "bar": {"color": "rgba(0, 0, 0, 0)"},
                 "steps": [
-                    {"range": [50, green_end], "color": "red"},
-                    {"range": [red_start, 100], "color": "green"},
+                    {"range": [50, win_rate_needed_pct], "color": "red"},
+                    {"range": [win_rate_needed_pct, 100], "color": "green"},
                 ],
                 "threshold": {
                     "line": {"color": "black", "width": 3},
@@ -2053,11 +1997,9 @@ def render_strike_rate_section(
             },
         )
     )
-    gauge_fig.update_layout(
-        height=250,
-        margin=dict(l=10, r=10, t=60, b=10),
-    )
+    gauge_fig.update_layout(height=250, margin=dict(l=10, r=10, t=60, b=10))
     st.plotly_chart(gauge_fig, width='stretch', config={'displayModeBar': False})
+
     if not pd.isna(avg_entry_price):
         average_entry_display = f"{avg_entry_price:.2f}"
         if not pd.isna(min_entry_price) and not pd.isna(max_entry_price):
@@ -2067,67 +2009,41 @@ def render_strike_rate_section(
     else:
         average_entry_display = "N/A"
     win_rate_display = f"{win_rate_needed:.2f}%" if not pd.isna(win_rate_needed) else "N/A"
-    if not pd.isna(strike_rate) and not pd.isna(win_rate_needed):
-        edge_value = strike_rate - win_rate_needed
-        edge_display = f"{edge_value:+.2f}%"
-    else:
-        edge_display = "N/A"
+    edge_display = (
+        f"{(strike_rate - win_rate_needed):+.2f}%"
+        if not pd.isna(strike_rate) and not pd.isna(win_rate_needed)
+        else "N/A"
+    )
     if strike_sample_size is not None and autotune_sample_size is not None:
-        st.caption(
-            f"Samples: autotune={autotune_sample_size}, strike rate={strike_sample_size}"
-        )
-    autotune_objective_label = st.radio(
-        "Autotune objective",
-        options=("Max edge", "Max expected P/L"),
-        index=0,
-        key="autotune_objective",
-        horizontal=True,
-    )
-    objective_map = {
-        "Max edge": "edge",
-        "Max expected P/L": "expectancy",
-    }
-    autotune_objective = objective_map.get(autotune_objective_label, "edge")
-    second_entry_autotune_objective_label = st.radio(
-        "Second-entry autotune objective",
-        options=("Max edge", "Max expected P/L"),
-        index=0,
-        key="second_entry_autotune_objective",
-        horizontal=True,
-    )
-    second_entry_autotune_objective = objective_map.get(
-        second_entry_autotune_objective_label,
-        "edge",
-    )
-    coarse_autotune_objective_label = st.radio(
-        "Coarse autotune objective",
-        options=("Max edge", "Max expected P/L"),
-        index=0,
-        key="coarse_autotune_objective",
-        horizontal=True,
-    )
-    coarse_objective_map = {
-        "Max edge": "edge",
-        "Max expected P/L": "expected_pnl",
-    }
-    coarse_autotune_objective = coarse_objective_map.get(
-        coarse_autotune_objective_label,
-        "edge",
-    )
-    coarse_minutes_min = cadence_autotune_config["coarse_minutes_min"]
-    coarse_minutes_max = cadence_autotune_config["coarse_minutes_max"]
-    coarse_minutes_default = cadence_autotune_config["coarse_minutes_default"]
-    coarse_minutes_step = cadence_autotune_config["coarse_minutes_step"]
-    coarse_entry_bounds = cadence_autotune_config["coarse_entry_bounds"]
-    coarse_hold_bounds = cadence_autotune_config["coarse_hold_bounds"]
-    coarse_second_entry_bounds = cadence_autotune_config["coarse_second_entry_bounds"]
-    coarse_entry_step = cadence_autotune_config["coarse_entry_step"]
-    coarse_hold_step = cadence_autotune_config["coarse_hold_step"]
-    coarse_second_entry_step = cadence_autotune_config["coarse_second_entry_step"]
-    minutes_display_format = cadence_autotune_config["minutes_display_format"]
-    coarse_minutes_format = cadence_autotune_config["coarse_minutes_format"]
+        st.caption(f"Samples: autotune={autotune_sample_size}, strike rate={strike_sample_size}")
 
-    with st.expander("Coarse autotune settings", expanded=False):
+    metrics_table = pd.DataFrame(
+        {
+            "Metric": ["Average Entry", "Win Rate Needed", "Edge"],
+            "Value": [average_entry_display, win_rate_display, edge_display],
+        }
+    )
+    st.table(metrics_table)
+
+    optimization_clicked = st.button(
+        "Run Optimization",
+        key="optimization_button",
+        use_container_width=True,
+    )
+
+    with st.expander("Advanced optimization settings", expanded=False):
+        coarse_minutes_min = cadence_autotune_config["coarse_minutes_min"]
+        coarse_minutes_max = cadence_autotune_config["coarse_minutes_max"]
+        coarse_minutes_default = cadence_autotune_config["coarse_minutes_default"]
+        coarse_minutes_step = cadence_autotune_config["coarse_minutes_step"]
+        coarse_entry_bounds = cadence_autotune_config["coarse_entry_bounds"]
+        coarse_hold_bounds = cadence_autotune_config["coarse_hold_bounds"]
+        coarse_second_entry_bounds = cadence_autotune_config["coarse_second_entry_bounds"]
+        coarse_entry_step = cadence_autotune_config["coarse_entry_step"]
+        coarse_hold_step = cadence_autotune_config["coarse_hold_step"]
+        coarse_second_entry_step = cadence_autotune_config["coarse_second_entry_step"]
+        coarse_minutes_format = cadence_autotune_config["coarse_minutes_format"]
+
         coarse_slider_label = "Minutes after open range"
         if selected_cadence == "5min":
             coarse_slider_label = "Start/end after open (m:ss)"
@@ -2140,20 +2056,10 @@ def render_strike_rate_section(
             format=coarse_minutes_format,
             key="coarse_minutes_after_open_range",
         )
-        cadence_caption = (
-            "Market window cadence: "
-            + cadence_autotune_config["minutes_display_label"].format(
-                value=cadence_autotune_config["market_window_minutes"]
-            )
+        st.caption(
+            "Optimization objective: Max expected P/L | "
+            f"Minimum samples: {int(st.session_state.get('min_autotune_samples', 200))}"
         )
-        if selected_cadence == "5min":
-            cadence_caption += (
-                f" | Coarse range selected: "
-                f"{_format_minutes_as_clock(coarse_minutes_range[0])}"
-                f"..{_format_minutes_as_clock(coarse_minutes_range[1])}"
-                " (30-second steps)"
-            )
-        st.caption(cadence_caption)
         coarse_entry_range = st.slider(
             "Entry threshold range",
             min_value=coarse_entry_bounds[0],
@@ -2173,7 +2079,7 @@ def render_strike_rate_section(
             key="coarse_hold_threshold_range",
         )
         coarse_second_entry_threshold_range = st.slider(
-            "Second entry threshold range",
+            "Second entry threshold range (phase 2 only)",
             min_value=coarse_second_entry_bounds[0],
             max_value=coarse_second_entry_bounds[1],
             value=coarse_second_entry_bounds,
@@ -2182,14 +2088,13 @@ def render_strike_rate_section(
             key="coarse_second_entry_threshold_range",
         )
         coarse_second_entry_modes = st.multiselect(
-            "Second entry modes",
+            "Second entry modes (phase 2)",
             options=("additive", "sole"),
             default=("additive", "sole"),
             key="coarse_second_entry_modes",
         )
-        st.divider()
         save_results_enabled = st.checkbox(
-            "Save results to CSV",
+            "Save optimization candidates to CSV",
             key="coarse_autotune_save_enabled",
         )
         st.text_input(
@@ -2198,132 +2103,16 @@ def render_strike_rate_section(
             help="Relative paths are saved under the dashboard directory.",
             disabled=not save_results_enabled,
         )
-        resolved_save_path_preview = (
-            _resolve_results_path(st.session_state.coarse_autotune_save_path)
-            if save_results_enabled
-            else None
-        )
-        incremental_status = (
-            "enabled" if save_results_enabled and resolved_save_path_preview else "disabled"
-        )
-        st.caption(f"Incremental CSV writes: {incremental_status}")
-        st.caption(
-            f"CSV path: {resolved_save_path_preview or 'Not set'}"
-        )
-        load_results_enabled = st.checkbox(
-            "Load saved results",
-            key="coarse_autotune_load_enabled",
-        )
-        st.text_input(
-            "Load path",
-            key="coarse_autotune_load_path",
-            help="Provide the CSV created by coarse autotune.",
-            disabled=not load_results_enabled,
-        )
-    metrics_container = st.container()
-    with metrics_container:
-        metrics_table = pd.DataFrame(
-            {
-                "Metric": ["Average Entry", "Win Rate Needed", "Edge"],
-                "Value": [
-                    average_entry_display,
-                    win_rate_display,
-                    edge_display,
-                ],
-            }
-        )
-        st.table(metrics_table)
-    autotune_col, coarse_autotune_col = st.columns(2)
-    with autotune_col:
-        autotune_clicked = st.button(
-            "Autotune",
-            key="autotune_button",
-            use_container_width=True,
-        )
-    with coarse_autotune_col:
-        coarse_autotune_clicked = st.button(
-            "Coarse Autotune",
-            key="coarse_autotune_button",
-            use_container_width=True,
-        )
-    if autotune_clicked:
-        progress_container = st.empty()
-        status_container = st.status("Autotuning…", expanded=True)
-        progress_bar = progress_container.progress(0)
 
-        def _progress_callback(current_step, total_steps, message):
-            progress_bar.progress(current_step / total_steps)
-            status_container.write(_humanize_autotune_progress_message(message, selected_cadence))
-
-        with status_container:
-            def _autotune_metrics(df, column, minutes, threshold, hold_threshold):
-                return _calculate_strike_rate_metrics(
-                    df,
-                    column,
-                    minutes,
-                    threshold,
-                    hold_threshold,
-                    second_entry_mode,
-                    second_entry_threshold,
-                    trade_value_usd,
-                    history_segment="autotune",
-                    precomputed_groups=precomputed_groups,
-                    precomputed_target_order=precomputed_target_order,
-                    return_dict=True,
-                    market_window_minutes=selected_cadence_minutes,
-                )
-
-            best_result = run_autotune(
-                history_df,
-                history_time_column,
-                _autotune_metrics,
-                minutes_range=np.arange(
-                    cadence_autotune_config["minutes_after_open_min"],
-                    cadence_autotune_config["minutes_after_open_max"]
-                    + (cadence_autotune_config["minutes_after_open_step"] / 2),
-                    cadence_autotune_config["minutes_after_open_step"],
-                ),
-                progress_callback=_progress_callback,
-                objective=autotune_objective,
-            )
-        progress_container.empty()
-        status_container.update(state="complete", label="Autotune complete")
-        if best_result:
-            st.session_state.autotune_result = best_result
-            st.session_state.autotune_message = None
+    if optimization_clicked:
+        if not coarse_second_entry_modes:
+            st.session_state.optimization_result = None
+            st.session_state.optimization_message = "Select at least one second-entry mode"
+            st.session_state.coarse_autotune_results_df = None
         else:
-            st.session_state.autotune_result = None
-            st.session_state.autotune_message = "No viable data for autotune"
-    if coarse_autotune_clicked:
-        if load_results_enabled:
-            load_path_value = st.session_state.coarse_autotune_load_path
-            resolved_load_path = _resolve_results_path(load_path_value)
-            if not resolved_load_path or not os.path.exists(resolved_load_path):
-                st.session_state.coarse_autotune_result = None
-                st.session_state.coarse_autotune_message = "Saved results file not found"
-                st.session_state.coarse_autotune_results_df = None
-            else:
-                try:
-                    loaded_df = pd.read_csv(resolved_load_path)
-                    results_df = _prepare_coarse_results_df(loaded_df)
-                    st.session_state.coarse_autotune_results_df = results_df
-                    best_result = _select_best_coarse_result(results_df, coarse_autotune_objective)
-                    if best_result:
-                        st.session_state.coarse_autotune_result = best_result
-                        st.session_state.coarse_autotune_message = None
-                    else:
-                        st.session_state.coarse_autotune_result = None
-                        st.session_state.coarse_autotune_message = "No viable data in saved results"
-                except Exception as exc:
-                    st.session_state.coarse_autotune_result = None
-                    st.session_state.coarse_autotune_message = f"Failed to load saved results: {exc}"
-                    st.session_state.coarse_autotune_results_df = None
-        elif not coarse_second_entry_modes:
-            st.session_state.coarse_autotune_result = None
-            st.session_state.coarse_autotune_message = "Select at least one second-entry mode"
-        else:
+            min_total_count = int(st.session_state.get("min_autotune_samples", 200))
             progress_container = st.empty()
-            status_container = st.status("Coarse autotuning…", expanded=True)
+            status_container = st.status("Optimizing strategy (phase 1 + phase 2)…", expanded=True)
             progress_bar = progress_container.progress(0)
 
             with status_container:
@@ -2334,23 +2123,15 @@ def render_strike_rate_section(
                         _humanize_autotune_progress_message(message, selected_cadence)
                     )
 
-                def _coarse_autotune_metrics(
-                    df,
-                    column,
-                    minutes,
-                    threshold,
-                    hold_threshold,
-                    mode,
-                    second_entry_threshold,
-                ):
+                def _phase1_metrics(df, column, minutes, threshold, hold_threshold, mode, second_entry_value):
                     return _calculate_strike_rate_metrics(
                         df,
                         column,
                         minutes,
                         threshold,
                         hold_threshold,
-                        mode,
-                        second_entry_threshold,
+                        "off",
+                        second_entry_value,
                         trade_value_usd,
                         history_segment="autotune",
                         precomputed_groups=precomputed_groups,
@@ -2359,23 +2140,36 @@ def render_strike_rate_section(
                         market_window_minutes=selected_cadence_minutes,
                     )
 
-                run_id = f"coarse_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+                def _phase2_metrics(df, column, minutes, threshold, hold_threshold, mode, second_entry_value):
+                    return _calculate_strike_rate_metrics(
+                        df,
+                        column,
+                        minutes,
+                        threshold,
+                        hold_threshold,
+                        mode,
+                        second_entry_value,
+                        trade_value_usd,
+                        history_segment="autotune",
+                        precomputed_groups=precomputed_groups,
+                        precomputed_target_order=precomputed_target_order,
+                        return_dict=True,
+                        market_window_minutes=selected_cadence_minutes,
+                    )
+
+                run_id = f"opt_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
                 save_path_value = st.session_state.coarse_autotune_save_path
                 if save_results_enabled and not save_path_value:
                     save_path_value = _default_coarse_autotune_filename()
                     st.session_state.coarse_autotune_save_path = save_path_value
-                resolved_save_path = (
-                    _resolve_results_path(save_path_value) if save_results_enabled else None
-                )
-                incremental_active = bool(save_results_enabled and resolved_save_path)
-                if incremental_active:
-                    status_container.caption(
-                        f"Incremental CSV writes enabled: {resolved_save_path}"
-                    )
-                coarse_results = run_coarse_autotune(
+                resolved_save_path = _resolve_results_path(save_path_value) if save_results_enabled else None
+
+                # Phase 1: second entry forced off for fast scout
+                status_container.caption("Phase 1/2: scouting base entry setup with second-entry disabled")
+                phase1_results = run_coarse_autotune(
                     history_df,
                     history_time_column,
-                    _coarse_autotune_metrics,
+                    _phase1_metrics,
                     minutes_range=np.arange(
                         coarse_minutes_range[0],
                         coarse_minutes_range[1] + (coarse_minutes_step / 2),
@@ -2391,63 +2185,95 @@ def render_strike_rate_section(
                         coarse_hold_range[1] + 0.001,
                         coarse_hold_step,
                     ),
-                    second_entry_threshold_range=np.arange(
-                        coarse_second_entry_threshold_range[0],
-                        coarse_second_entry_threshold_range[1] + 0.001,
-                        coarse_second_entry_step,
-                    ),
-                    modes=[_normalize_second_entry_mode(mode) for mode in coarse_second_entry_modes],
+                    second_entry_threshold_range=[second_entry_threshold],
+                    modes=["off"],
                     progress_callback=_coarse_progress_callback,
-                    save_path=resolved_save_path,
-                    run_id=run_id,
-                    incremental_save=incremental_active,
+                    run_id=f"{run_id}_phase1",
+                    min_total_count=min_total_count,
                 )
+                phase1_df = _prepare_coarse_results_df(phase1_results)
+                phase1_df = phase1_df.dropna(subset=["expected_pnl", "total_count"])
+                phase1_df = phase1_df[phase1_df["total_count"] >= min_total_count]
+                if phase1_df.empty:
+                    st.session_state.optimization_result = None
+                    st.session_state.optimization_message = (
+                        "No viable phase-1 candidates met minimum sample count"
+                    )
+                    st.session_state.coarse_autotune_results_df = None
+                else:
+                    top_n = min(8, len(phase1_df))
+                    top_phase1 = phase1_df.nlargest(top_n, "expected_pnl")
+                    candidate_pairs = sorted(
+                        {
+                            (float(row["minutes_after_open"]), float(row["entry_threshold"]))
+                            for _, row in top_phase1.iterrows()
+                        }
+                    )
+                    status_container.caption(
+                        f"Phase 2/2: refining {len(candidate_pairs)} top phase-1 candidates with second-entry"
+                    )
 
-                results_df = _prepare_coarse_results_df(coarse_results)
-                st.session_state.coarse_autotune_results_df = results_df
-                best_result = _select_best_coarse_result(results_df, coarse_autotune_objective)
-            progress_container.empty()
-            status_container.update(state="complete", label="Coarse autotune complete")
-            if (
-                save_results_enabled
-                and st.session_state.coarse_autotune_results_df is not None
-                and not incremental_active
-            ):
-                save_path_value = st.session_state.coarse_autotune_save_path
-                if not save_path_value:
-                    save_path_value = _default_coarse_autotune_filename()
-                    st.session_state.coarse_autotune_save_path = save_path_value
-                resolved_save_path = _resolve_results_path(save_path_value)
-                if resolved_save_path:
-                    try:
-                        st.session_state.coarse_autotune_results_df.to_csv(
-                            resolved_save_path,
-                            index=False,
+                    pair_set = {(round(m, 6), round(e, 2)) for m, e in candidate_pairs}
+
+                    def _phase2_filtered_metrics(df, column, minutes, threshold, hold_threshold, mode, second_entry_value):
+                        if (round(float(minutes), 6), round(float(threshold), 2)) not in pair_set:
+                            return {
+                                "strike_rate": np.nan,
+                                "win_rate_needed": np.nan,
+                                "total_count": 0,
+                                "expectancy": np.nan,
+                                "expected_pnl": np.nan,
+                            }
+                        return _phase2_metrics(
+                            df,
+                            column,
+                            minutes,
+                            threshold,
+                            hold_threshold,
+                            mode,
+                            second_entry_value,
                         )
-                    except Exception as exc:
-                        st.warning(f"Failed to save coarse autotune CSV: {exc}")
-            if best_result:
-                st.session_state.coarse_autotune_result = best_result
-                st.session_state.coarse_autotune_message = None
-            else:
-                st.session_state.coarse_autotune_result = None
-                st.session_state.coarse_autotune_message = "No viable data for coarse autotune"
-    if st.session_state.autotune_result:
-        result = st.session_state.autotune_result
-        minutes_value_display = _format_minutes_for_ui(result["minutes_after_open"], selected_cadence)
-        st.caption(
-            "Best: "
-            f"minutes_after_open={minutes_value_display}, "
-            f"entry_threshold={result['entry_threshold']:.2f}, "
-            f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
-            f"strike_rate={result['strike_rate']:.2f}%, "
-            f"win_rate_needed={result['win_rate_needed']:.2f}%, "
-            f"edge={result['edge']:.2f}%"
-        )
-    elif st.session_state.autotune_message:
-        st.caption(st.session_state.autotune_message)
-    if st.session_state.coarse_autotune_result:
-        result = st.session_state.coarse_autotune_result
+
+                    phase2_results = run_coarse_autotune(
+                        history_df,
+                        history_time_column,
+                        _phase2_filtered_metrics,
+                        minutes_range=np.array([m for m, _ in candidate_pairs]),
+                        entry_threshold_range=np.array([e for _, e in candidate_pairs]),
+                        hold_until_close_threshold_range=np.arange(
+                            coarse_hold_range[0],
+                            coarse_hold_range[1] + 0.001,
+                            coarse_hold_step,
+                        ),
+                        second_entry_threshold_range=np.arange(
+                            coarse_second_entry_threshold_range[0],
+                            coarse_second_entry_threshold_range[1] + 0.001,
+                            coarse_second_entry_step,
+                        ),
+                        modes=[_normalize_second_entry_mode(mode) for mode in coarse_second_entry_modes],
+                        progress_callback=_coarse_progress_callback,
+                        save_path=resolved_save_path,
+                        run_id=f"{run_id}_phase2",
+                        incremental_save=bool(resolved_save_path),
+                        min_total_count=min_total_count,
+                    )
+                    results_df = _prepare_coarse_results_df(phase2_results)
+                    results_df = results_df.dropna(subset=["expected_pnl", "total_count"])
+                    results_df = results_df[results_df["total_count"] >= min_total_count]
+                    st.session_state.coarse_autotune_results_df = results_df
+                    best_result = _select_best_coarse_result(results_df, "expected_pnl")
+                    if best_result:
+                        st.session_state.optimization_result = best_result
+                        st.session_state.optimization_message = None
+                    else:
+                        st.session_state.optimization_result = None
+                        st.session_state.optimization_message = "No viable phase-2 candidates"
+
+            progress_container.empty()
+            status_container.update(state="complete", label="Optimization complete")
+
+    if st.session_state.optimization_result:
+        result = st.session_state.optimization_result
         minutes_value_display = _format_minutes_for_ui(result["minutes_after_open"], selected_cadence)
         expected_pnl_display = (
             f"{result['expected_pnl']:.2f}"
@@ -2455,85 +2281,28 @@ def render_strike_rate_section(
             else "N/A"
         )
         st.caption(
-            "Coarse best: "
+            "Best optimized setup: "
             f"minutes_after_open={minutes_value_display}, "
             f"entry_threshold={result['entry_threshold']:.2f}, "
             f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
             f"second_entry_threshold={result['second_entry_threshold']:.2f}, "
             f"second_entry_mode={result['second_entry_mode']}, "
-            f"strike_rate={result['strike_rate']:.2f}%, "
-            f"win_rate_needed={result['win_rate_needed']:.2f}%, "
-            f"edge={result['edge']:.2f}%, "
-            f"expected_pnl={expected_pnl_display}"
+            f"expected_pnl={expected_pnl_display}, "
+            f"samples={int(result['total_count']) if not pd.isna(result['total_count']) else 0}"
         )
-    elif st.session_state.coarse_autotune_message:
-        st.caption(st.session_state.coarse_autotune_message)
-    second_entry_autotune_clicked = st.button(
-        "Run Second-Entry Autotune",
-        key="second_entry_autotune_button",
-        use_container_width=True,
-    )
-    if second_entry_autotune_clicked:
-        normalized_second_entry_mode = _normalize_second_entry_mode(second_entry_mode)
-        if normalized_second_entry_mode == "off":
-            st.session_state.second_entry_autotune_result = None
-            st.session_state.second_entry_autotune_panel = None
-            st.session_state.second_entry_autotune_message = None
-        else:
-            second_entry_progress_container = st.empty()
-            second_entry_status_container = st.status("Second-entry autotuning…", expanded=True)
-            second_entry_progress_bar = second_entry_progress_container.progress(0)
+    elif st.session_state.optimization_message:
+        st.caption(st.session_state.optimization_message)
 
-            def _second_entry_progress_callback(current_step, total_steps, message):
-                second_entry_progress_bar.progress(current_step / total_steps)
-                second_entry_status_container.write(message)
-
-            with second_entry_status_container:
-                second_entry_results = run_second_entry_autotune(
-                    history_df,
-                    history_time_column,
-                    minutes_after_open,
-                    entry_threshold,
-                    hold_until_close_threshold,
-                    modes=(normalized_second_entry_mode,),
-                    trade_value_usd=trade_value_usd,
-                    progress_callback=_second_entry_progress_callback,
-                    objective=second_entry_autotune_objective,
-                    precomputed_groups=precomputed_groups,
-                    precomputed_target_order=precomputed_target_order,
-                )
-            second_entry_progress_container.empty()
-            second_entry_status_container.update(
-                state="complete",
-                label="Second-entry autotune complete",
-            )
-            if second_entry_results and any(second_entry_results.values()):
-                st.session_state.second_entry_autotune_result = second_entry_results
-                st.session_state.second_entry_autotune_panel = _build_second_entry_autotune_panel(
-                    second_entry_results
-                )
-                st.session_state.second_entry_autotune_message = None
-            else:
-                st.session_state.second_entry_autotune_result = None
-                st.session_state.second_entry_autotune_panel = None
-                st.session_state.second_entry_autotune_message = "No viable data for second-entry autotune"
-    if st.session_state.second_entry_autotune_panel:
-        st.markdown("Second-entry autotune results")
-        panel_df = pd.DataFrame(st.session_state.second_entry_autotune_panel)
-        st.table(panel_df)
-    elif st.session_state.second_entry_autotune_message:
-        st.caption(st.session_state.second_entry_autotune_message)
     render_coarse_results_explorer(
         st.session_state.get("coarse_autotune_results_df"),
-        coarse_autotune_objective,
+        "expected_pnl",
         selected_cadence,
     )
-
 
 def render_coarse_results_explorer(results_df, objective, selected_cadence):
     if results_df is None or results_df.empty:
         return
-    st.subheader("Coarse autotune results explorer")
+    st.subheader("Optimization results explorer")
     objective_column = "expected_pnl" if objective == "expected_pnl" else "edge"
     minutes_values = sorted(
         {
@@ -2572,7 +2341,7 @@ def render_coarse_results_explorer(results_df, objective, selected_cadence):
         ]
     )
     if filtered_df.empty:
-        st.info("No coarse autotune results match the selected filters.")
+        st.info("No optimization results match the selected filters.")
         return
 
     filtered_df = filtered_df.copy()
@@ -2742,6 +2511,15 @@ def render_dashboard():
             value=cadence_autotune_config["market_window_minutes"]
         )
     )
+    min_autotune_samples = st.sidebar.number_input(
+        "Minimum optimization samples",
+        min_value=50,
+        max_value=5000,
+        value=int(st.session_state.get("min_autotune_samples", 200)),
+        step=25,
+        help="Candidates below this count are excluded from optimization ranking.",
+    )
+    st.session_state.min_autotune_samples = int(min_autotune_samples)
 
     selected_date_state_key = f"selected_date_{cadence_key}"
     files_by_date, legacy_path = _get_available_data_files_for_cadence(cadence_key)
