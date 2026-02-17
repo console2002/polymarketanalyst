@@ -2251,8 +2251,7 @@ def render_strike_rate_section(
                     st.session_state.coarse_autotune_save_path = save_path_value
                 resolved_save_path = _resolve_results_path(save_path_value) if save_results_enabled else None
 
-                # Phase 1: second entry forced off; hold-until-close is always enabled.
-                phase1_hold_values = np.array([HOLD_UNTIL_CLOSE_DISABLED_VALUE])
+                # Phase 1: second entry forced off.
                 phase1_combination_total = count_valid_parameter_combinations(
                     np.arange(
                         coarse_minutes_range[0],
@@ -2264,14 +2263,12 @@ def render_strike_rate_section(
                         coarse_entry_range[1] + 0.001,
                         coarse_entry_step,
                     ),
-                    phase1_hold_values,
                     [second_entry_threshold],
                     ["off"],
                 )
                 phase1_caption = (
                     "Phase 1/2: scouting base entry setup with second-entry disabled "
-                    f"with hold-to-close only; "
-                    f"combinations={phase1_combination_total}"
+                    f"(combinations={phase1_combination_total})"
                 )
                 status_container.caption(phase1_caption)
                 _append_optimization_log(phase1_caption, optimization_log_placeholder)
@@ -2289,7 +2286,7 @@ def render_strike_rate_section(
                         coarse_entry_range[1] + 0.001,
                         coarse_entry_step,
                     ),
-                    hold_until_close_threshold_range=phase1_hold_values,
+                    hold_until_close_threshold=HOLD_UNTIL_CLOSE_DISABLED_VALUE,
                     second_entry_threshold_range=[second_entry_threshold],
                     modes=["off"],
                     progress_callback=_coarse_progress_callback,
@@ -2332,7 +2329,6 @@ def render_strike_rate_section(
                     )
                     phase2_combination_total = count_valid_parameter_combinations_for_pairs(
                         candidate_pairs,
-                        [HOLD_UNTIL_CLOSE_DISABLED_VALUE],
                         np.arange(
                             coarse_second_entry_threshold_range[0],
                             coarse_second_entry_threshold_range[1] + 0.001,
@@ -2353,7 +2349,7 @@ def render_strike_rate_section(
                         history_time_column,
                         _phase2_metrics,
                         minutes_entry_pairs=candidate_pairs,
-                        hold_until_close_threshold_range=[HOLD_UNTIL_CLOSE_DISABLED_VALUE],
+                        hold_until_close_threshold=HOLD_UNTIL_CLOSE_DISABLED_VALUE,
                         second_entry_threshold_range=np.arange(
                             coarse_second_entry_threshold_range[0],
                             coarse_second_entry_threshold_range[1] + 0.001,
@@ -2385,7 +2381,7 @@ def render_strike_rate_section(
                     summary_lines = [
                         f"Min samples filter: {min_total_count}",
                         (
-                            "Phase 1 (second-entry off, hold-to-close only) — "
+                            "Phase 1 (second-entry off) — "
                             f"evaluated={phase1_filter_summary['total_rows']}, "
                             f"removed={phase1_filter_summary['removed_rows']}, "
                             f"retained={phase1_filter_summary['retained_rows']}"
