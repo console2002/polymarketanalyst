@@ -12,7 +12,7 @@ from plotly.subplots import make_subplots
 import datetime
 import re
 import uuid
-from autotune import run_coarse_autotune
+from autotune import count_valid_parameter_combinations, run_coarse_autotune
 from dashboard_metrics import (
     build_trade_pnl_records,
     summarize_drawdowns,
@@ -117,6 +117,12 @@ def _humanize_autotune_progress_message(message, cadence_key):
         return f"minutes_after_open={_format_minutes_for_ui(minutes_value, cadence_key)}"
 
     return re.sub(r"minutes_after_open=([0-9]*\.?[0-9]+)", _replace_minutes, message)
+
+
+def _resolve_phase1_hold_values(hold_baseline, hold_range):
+    hold_min, hold_max = hold_range
+    clipped_baseline = min(max(float(hold_baseline), float(hold_min)), float(hold_max))
+    return np.array([round(clipped_baseline, 2)])
 
 
 def _append_optimization_log(message, log_placeholder=None):
@@ -2266,8 +2272,31 @@ def render_strike_rate_section(
                     st.session_state.coarse_autotune_save_path = save_path_value
                 resolved_save_path = _resolve_results_path(save_path_value) if save_results_enabled else None
 
-                # Phase 1: second entry forced off for fast scout
-                phase1_caption = "Phase 1/2: scouting base entry setup with second-entry disabled"
+                # Phase 1: second entry forced off; hold fixed at baseline for fast scout
+                phase1_hold_values = _resolve_phase1_hold_values(
+                    hold_until_close_threshold,
+                    coarse_hold_range,
+                )
+                phase1_combination_total = count_valid_parameter_combinations(
+                    np.arange(
+                        coarse_minutes_range[0],
+                        coarse_minutes_range[1] + (coarse_minutes_step / 2),
+                        coarse_minutes_step,
+                    ),
+                    np.arange(
+                        coarse_entry_range[0],
+                        coarse_entry_range[1] + 0.001,
+                        coarse_entry_step,
+                    ),
+                    phase1_hold_values,
+                    [second_entry_threshold],
+                    ["off"],
+                )
+                phase1_caption = (
+                    "Phase 1/2: scouting base entry setup with second-entry disabled "
+                    f"and fixed hold ({phase1_hold_values[0]:.2f}); "
+                    f"combinations={phase1_combination_total}"
+                )
                 status_container.caption(phase1_caption)
                 _append_optimization_log(phase1_caption, optimization_log_placeholder)
                 phase1_results = run_coarse_autotune(
@@ -2284,11 +2313,7 @@ def render_strike_rate_section(
                         coarse_entry_range[1] + 0.001,
                         coarse_entry_step,
                     ),
-                    hold_until_close_threshold_range=np.arange(
-                        coarse_hold_range[0],
-                        coarse_hold_range[1] + 0.001,
-                        coarse_hold_step,
-                    ),
+                    hold_until_close_threshold_range=phase1_hold_values,
                     second_entry_threshold_range=[second_entry_threshold],
                     modes=["off"],
                     progress_callback=_coarse_progress_callback,
@@ -2319,7 +2344,10 @@ def render_strike_rate_section(
                         st.session_state.optimization_notice = notice
                         _append_optimization_log(notice, optimization_log_placeholder)
                     top_n = min(8, len(phase1_candidates_df))
-                    top_phase1 = phase1_candidates_df.nlargest(top_n, "expected_pnl")
+                    top_phase1 = phase1_candidates_df.sort_values(
+                        by=["minutes_after_open", "entry_threshold", "expected_pnl"],
+                        ascending=[True, True, False],
+                    ).head(top_n)
                     candidate_pairs = sorted(
                         {
                             (float(row["minutes_after_open"]), float(row["entry_threshold"]))
@@ -2327,7 +2355,8 @@ def render_strike_rate_section(
                         }
                     )
                     phase2_caption = (
-                        f"Phase 2/2: refining {len(candidate_pairs)} top phase-1 candidates with second-entry"
+                        f"Phase 2/2: refining {len(candidate_pairs)} top phase-1 candidates by sweeping "
+                        "hold, second-entry threshold, and second-entry mode"
                     )
                     status_container.caption(phase2_caption)
                     _append_optimization_log(phase2_caption, optimization_log_placeholder)
@@ -2387,13 +2416,13 @@ def render_strike_rate_section(
                     summary_lines = [
                         f"Min samples filter: {min_total_count}",
                         (
-                            "Phase 1 — "
+                            "Phase 1 (second-entry off, fixed hold) — "
                             f"evaluated={phase1_filter_summary['total_rows']}, "
                             f"removed={phase1_filter_summary['removed_rows']}, "
                             f"retained={phase1_filter_summary['retained_rows']}"
                         ),
                         (
-                            "Phase 2 — "
+                            "Phase 2 (hold + second-entry threshold + mode sweep) — "
                             f"evaluated={phase2_filter_summary['total_rows']}, "
                             f"removed={phase2_filter_summary['removed_rows']}, "
                             f"retained={phase2_filter_summary['retained_rows']}"
