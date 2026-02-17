@@ -2570,6 +2570,8 @@ def render_dashboard():
         help="Choose which cadence folder to load dated CSV files from.",
     )
     expected_cadence_minutes = CADENCE_OPTIONS[cadence_key]
+    active_cadence_dir = os.path.join(SCRIPT_DIR, "data", cadence_key)
+    st.sidebar.caption(f"Active source: `{active_cadence_dir}`")
 
     selected_date_state_key = f"selected_date_{cadence_key}"
     files_by_date, legacy_path = _get_available_data_files_for_cadence(cadence_key)
@@ -2591,7 +2593,10 @@ def render_dashboard():
         )
     else:
         selected_date = None
-        st.sidebar.caption("No dated CSV files found for selected cadence; using legacy data file if available.")
+        st.sidebar.caption(
+            "No dated CSV files found for selected cadence; falling back to "
+            "`market_data.csv` only if it exists."
+        )
 
     jump_container = st.sidebar.container()
 

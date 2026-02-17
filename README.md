@@ -56,6 +56,8 @@ Recent updates have brought significant improvements to both the backtesting cap
 - **CSV Storage by Profile**: Writes daily CSV files to `data/5min/DDMMYYYY.csv` and `data/15min/DDMMYYYY.csv`.
 
 ### Interactive Dashboard
+- **Cadence-Aware Data Source Selection**: The sidebar **Market cadence** control switches the dashboard between dated files in `data/15min/` and `data/5min/`.
+- **Legacy Fallback**: The dashboard only falls back to legacy `market_data.csv` when the selected cadence folder has no dated CSV files.
 - **Live Auto-Refresh**: Automatically updates periodically (every second) to ensure the latest data is displayed.
 - **Advanced Visualization**:
   - Probability trends for Up/Down contracts
