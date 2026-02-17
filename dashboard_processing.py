@@ -70,7 +70,9 @@ def calculate_market_trade_records(
         if "TargetTime_dt" not in df.columns:
             df["TargetTime_dt"] = pd.to_datetime(df["TargetTime"], format=time_format, errors="coerce")
 
-    minutes_threshold = pd.Timedelta(minutes=int(minutes_after_open))
+    # Preserve sub-minute offsets (e.g., 2.5 minutes on 5m cadence backtests); int() truncation
+    # delays eligibility and can shift threshold-crossing detection by a full sample.
+    minutes_threshold = pd.Timedelta(minutes=float(minutes_after_open))
     probability_threshold = float(entry_threshold)
     hold_threshold = float(hold_until_close_threshold)
 
