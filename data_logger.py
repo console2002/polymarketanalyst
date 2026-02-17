@@ -192,8 +192,14 @@ def _stop_logger_pid(pid):
     return True, f"Stop signal sent to logger PID {pid}."
 
 
-def _current_market_window(profile_key=None):
-    profile = get_market_profile(profile_key or default_market_profile_key())
+def _resolve_profile(profile_key=None, profile=None):
+    if profile is not None:
+        return profile
+    return get_market_profile(profile_key or default_market_profile_key())
+
+
+def _current_market_window(profile_key=None, profile=None):
+    profile = _resolve_profile(profile_key=profile_key, profile=profile)
     now = datetime.datetime.now(pytz.utc)
     base_time = now.replace(second=0, microsecond=0)
     remainder = base_time.minute % profile.window_minutes
@@ -248,8 +254,8 @@ def _fetch_gamma_market(slug):
     return response.json(), None
 
 
-def _resolve_market_by_start_time(start_time_utc, profile_key=None):
-    profile = get_market_profile(profile_key or default_market_profile_key())
+def _resolve_market_by_start_time(start_time_utc, profile_key=None, profile=None):
+    profile = _resolve_profile(profile_key=profile_key, profile=profile)
     if start_time_utc.tzinfo is None:
         start_time_utc = pytz.utc.localize(start_time_utc)
     polymarket_url = generate_market_url(start_time_utc, profile_key=profile.key)
@@ -277,9 +283,9 @@ def _resolve_market_by_start_time(start_time_utc, profile_key=None):
     }, None
 
 
-def _resolve_current_market(profile_key=None):
-    profile = get_market_profile(profile_key or default_market_profile_key())
-    start_time_utc, _ = _current_market_window(profile_key=profile.key)
+def _resolve_current_market(profile_key=None, profile=None):
+    profile = _resolve_profile(profile_key=profile_key, profile=profile)
+    start_time_utc, _ = _current_market_window(profile=profile)
     market_duration = datetime.timedelta(minutes=profile.window_minutes)
     candidate_times = [start_time_utc + market_duration * offset for offset in range(3)]
     last_error = None
@@ -706,8 +712,11 @@ async def run_logger(
     broadcaster=None,
     stop_event=None,
 ):
-    selected_profile_key = selected_profile_key or default_market_profile_key()
-    selected_profile = selected_profile or get_market_profile(selected_profile_key)
+    selected_profile = _resolve_profile(
+        profile_key=selected_profile_key,
+        profile=selected_profile,
+    )
+    selected_profile_key = selected_profile.key
     market_duration = datetime.timedelta(minutes=selected_profile.window_minutes)
     if stop_event is None:
         stop_event = asyncio.Event()
@@ -722,11 +731,11 @@ async def run_logger(
             if next_start_time:
                 market_info, err = _resolve_market_by_start_time(
                     next_start_time,
-                    profile_key=selected_profile_key,
+                    profile=selected_profile,
                 )
             else:
                 market_info, err = _resolve_current_market(
-                    profile_key=selected_profile_key
+                    profile=selected_profile
                 )
             if err:
                 print(f"Error: {err}")
