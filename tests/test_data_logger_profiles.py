@@ -42,8 +42,8 @@ def test_current_market_window_rounds_for_15m_profile(monkeypatch):
 def test_get_data_file_uses_profile_specific_subdirs():
     ts = datetime.datetime(2026, 1, 2, 1, 0, tzinfo=pytz.utc)
 
-    file_5m = data_logger._get_data_file(ts, "btc_5m")
-    file_15m = data_logger._get_data_file(ts, "btc_15m")
+    file_5m = data_logger._get_data_file(ts, get_market_profile("btc_5m"))
+    file_15m = data_logger._get_data_file(ts, get_market_profile("btc_15m"))
 
     assert file_5m.endswith("data/5min/01012026.csv")
     assert file_15m.endswith("data/15min/01012026.csv")
@@ -70,7 +70,7 @@ def test_run_logger_rollover_uses_profile_duration(monkeypatch):
     stop_event = asyncio.Event()
 
     class StubAggregator:
-        def __init__(self, market_info, broadcaster=None):
+        def __init__(self, market_info, profile, broadcaster=None):
             self.market_info = market_info
 
         async def monitor_no_updates(self):
@@ -106,9 +106,43 @@ def test_run_logger_rollover_uses_profile_duration(monkeypatch):
         fake_resolve_market_by_start_time,
     )
     monkeypatch.setattr(data_logger, "_ensure_csv", lambda path: None)
-    monkeypatch.setattr(data_logger, "_get_data_file", lambda now_dt, profile_or_key=None: "x.csv")
+    monkeypatch.setattr(data_logger, "_get_data_file", lambda now_dt, profile: "x.csv")
     monkeypatch.setattr(data_logger, "STATUS_CHECK_INTERVAL_SECONDS", 0)
 
-    asyncio.run(data_logger.run_logger(profile_key="btc_5m", stop_event=stop_event))
+    asyncio.run(data_logger.run_logger(selected_profile_key="btc_5m", stop_event=stop_event))
 
     assert captured_start_times == [expiration - datetime.timedelta(minutes=5)]
+
+
+def test_writer_reopens_on_et_day_change_with_profile_subdir(tmp_path, monkeypatch):
+    profile = get_market_profile("btc_5m")
+    monkeypatch.setattr(data_logger, "SCRIPT_DIR", str(tmp_path))
+
+    market_info = {
+        "outcomes": ["up", "down"],
+        "profile_key": profile.key,
+    }
+    aggregator = data_logger.PriceAggregator(market_info, profile)
+
+    ts_day1 = datetime.datetime(2026, 1, 2, 3, 59, tzinfo=pytz.utc)
+    ts_day2 = datetime.datetime(2026, 1, 2, 5, 1, tzinfo=pytz.utc)
+
+    file_day1 = data_logger._get_data_file(ts_day1, profile)
+    file_day2 = data_logger._get_data_file(ts_day2, profile)
+    assert file_day1 != file_day2
+    assert Path(file_day1).parent.name == "5min"
+    assert Path(file_day2).parent.name == "5min"
+
+    writer_day1 = aggregator._get_writer(file_day1)
+    writer_day1.writerow(["d1"])
+    handle_day1 = aggregator._current_file_handle
+
+    writer_day2 = aggregator._get_writer(file_day2)
+    writer_day2.writerow(["d2"])
+
+    assert writer_day1 is not writer_day2
+    assert handle_day1.closed
+    assert Path(file_day1).exists()
+    assert Path(file_day2).exists()
+
+    aggregator._current_file_handle.close()

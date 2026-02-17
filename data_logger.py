@@ -83,18 +83,13 @@ def _format_timestamp_utc(value):
     return value.astimezone(pytz.utc).isoformat()
 
 
-def _get_data_file(timestamp_dt, profile_or_data_subdir):
+def _get_data_file(timestamp_dt, active_profile):
     if not timestamp_dt:
         timestamp_dt = datetime.datetime.now(pytz.utc)
     if timestamp_dt.tzinfo is None:
         timestamp_dt = pytz.utc.localize(timestamp_dt)
 
-    if hasattr(profile_or_data_subdir, "data_subdir"):
-        data_subdir = profile_or_data_subdir.data_subdir
-    elif profile_or_data_subdir in MARKET_TYPE_CHOICES:
-        data_subdir = get_market_profile(profile_or_data_subdir).data_subdir
-    else:
-        data_subdir = profile_or_data_subdir
+    data_subdir = active_profile.data_subdir
 
     date_str = timestamp_dt.astimezone(TIMEZONE_ET).strftime(DATE_FORMAT)
     return os.path.join(SCRIPT_DIR, "data", data_subdir, f"{date_str}.csv")
@@ -679,6 +674,7 @@ class PriceAggregator:
         if self._current_file_path != data_file:
             if self._current_file_handle:
                 self._current_file_handle.close()
+            os.makedirs(os.path.dirname(data_file), exist_ok=True)
             _ensure_csv(data_file)
             self._current_file_handle = open(data_file, mode="a", newline="")
             self._current_file_path = data_file
