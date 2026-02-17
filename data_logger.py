@@ -197,8 +197,8 @@ def _stop_logger_pid(pid):
     return True, f"Stop signal sent to logger PID {pid}."
 
 
-def _current_market_window(selected_profile_key=None):
-    profile = get_market_profile(selected_profile_key or default_market_profile_key())
+def _current_market_window(profile_key=None):
+    profile = get_market_profile(profile_key or default_market_profile_key())
     now = datetime.datetime.now(pytz.utc)
     base_time = now.replace(second=0, microsecond=0)
     remainder = base_time.minute % profile.window_minutes
@@ -253,8 +253,8 @@ def _fetch_gamma_market(slug):
     return response.json(), None
 
 
-def _resolve_market_by_start_time(start_time_utc, selected_profile_key=None):
-    profile = get_market_profile(selected_profile_key or default_market_profile_key())
+def _resolve_market_by_start_time(start_time_utc, profile_key=None):
+    profile = get_market_profile(profile_key or default_market_profile_key())
     if start_time_utc.tzinfo is None:
         start_time_utc = pytz.utc.localize(start_time_utc)
     polymarket_url = generate_market_url(start_time_utc, profile_key=profile.key)
@@ -282,9 +282,9 @@ def _resolve_market_by_start_time(start_time_utc, selected_profile_key=None):
     }, None
 
 
-def _resolve_current_market(selected_profile_key=None):
-    profile = get_market_profile(selected_profile_key or default_market_profile_key())
-    start_time_utc, _ = _current_market_window(selected_profile_key=profile.key)
+def _resolve_current_market(profile_key=None):
+    profile = get_market_profile(profile_key or default_market_profile_key())
+    start_time_utc, _ = _current_market_window(profile_key=profile.key)
     market_duration = datetime.timedelta(minutes=profile.window_minutes)
     candidate_times = [start_time_utc + market_duration * offset for offset in range(3)]
     last_error = None
@@ -292,7 +292,7 @@ def _resolve_current_market(selected_profile_key=None):
     for candidate_time in candidate_times:
         market_info, err = _resolve_market_by_start_time(
             candidate_time,
-            selected_profile_key=profile.key,
+            profile_key=profile.key,
         )
         if err:
             last_error = err
@@ -704,7 +704,14 @@ class PriceAggregator:
         return max(numeric_ages)
 
 
-async def run_logger(selected_profile_key, selected_profile, broadcaster=None, stop_event=None):
+async def run_logger(
+    selected_profile_key=None,
+    selected_profile=None,
+    broadcaster=None,
+    stop_event=None,
+):
+    selected_profile_key = selected_profile_key or default_market_profile_key()
+    selected_profile = selected_profile or get_market_profile(selected_profile_key)
     market_duration = datetime.timedelta(minutes=selected_profile.window_minutes)
     if stop_event is None:
         stop_event = asyncio.Event()
@@ -719,11 +726,11 @@ async def run_logger(selected_profile_key, selected_profile, broadcaster=None, s
             if next_start_time:
                 market_info, err = _resolve_market_by_start_time(
                     next_start_time,
-                    selected_profile_key=selected_profile_key,
+                    profile_key=selected_profile_key,
                 )
             else:
                 market_info, err = _resolve_current_market(
-                    selected_profile_key=selected_profile_key
+                    profile_key=selected_profile_key
                 )
             if err:
                 print(f"Error: {err}")
