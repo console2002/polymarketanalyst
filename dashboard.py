@@ -1464,6 +1464,12 @@ def prepare_probability_window(
     resample_interval,
     jump_container,
 ):
+    if "TargetTime_dt" not in df.columns and "TargetTime" in df.columns:
+        df = df.copy()
+        df["TargetTime_dt"] = pd.to_datetime(
+            df["TargetTime"], format=TIME_FORMAT, errors="coerce"
+        )
+
     if 'window_offset' not in st.session_state:
         st.session_state.window_offset = 0
 
