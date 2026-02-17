@@ -26,11 +26,11 @@ from second_entry_processing import calculate_market_trade_records_with_second_e
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) or os.getcwd()
 TIME_FORMAT = "%d/%m/%Y %H:%M:%S"
 DATE_FORMAT = "%d%m%Y"
-EXPECTED_MARKET_CADENCE_MINUTES = 15
 CADENCE_OPTIONS = {
     "15min": 15,
     "5min": 5,
 }
+DEFAULT_CADENCE_KEY = "15min"
 CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache", "second_entry")
 CACHE_SCHEMA_VERSION = 2
 COARSE_AUTOTUNE_COLUMNS = [
@@ -324,8 +324,8 @@ def load_data(selected_date, files_by_date, legacy_path, expected_cadence_minute
         if not cadence_ok:
             warning = (
                 f"Skipping {os.path.basename(data_file)}: detected {detected_cadence}m cadence, "
-                f"dashboard currently supports {expected_cadence_minutes}m cadence only "
-                f"(selected cadence: {cadence_key})."
+                f"dashboard currently supports selected {expected_cadence_minutes}m cadence "
+                f"for this view (selected cadence: {cadence_key})."
             )
             warnings.append(warning)
             logging.warning(warning)
@@ -361,7 +361,8 @@ def _load_all_data_cached(file_signatures, expected_cadence_minutes):
         if not cadence_ok:
             warning = (
                 f"Skipping {os.path.basename(data_file)}: detected {detected_cadence}m cadence, "
-                f"dashboard currently supports {expected_cadence_minutes}m cadence only."
+                f"dashboard currently supports selected {expected_cadence_minutes}m cadence "
+                f"for this view."
             )
             logging.warning(warning)
             warnings.append(warning)
@@ -2565,7 +2566,7 @@ def render_dashboard():
     cadence_key = st.sidebar.selectbox(
         "Market cadence",
         options=tuple(CADENCE_OPTIONS.keys()),
-        index=tuple(CADENCE_OPTIONS.values()).index(EXPECTED_MARKET_CADENCE_MINUTES),
+        index=tuple(CADENCE_OPTIONS.keys()).index(DEFAULT_CADENCE_KEY),
         help="Choose which cadence folder to load dated CSV files from.",
     )
     expected_cadence_minutes = CADENCE_OPTIONS[cadence_key]
