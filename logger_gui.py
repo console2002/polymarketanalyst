@@ -29,7 +29,7 @@ LAUNCH_LOG_MAX_LINES = 20
 STREAM_INACTIVE_THRESHOLD_SECONDS = 20
 LOGGER_PID_FILE = os.path.join(os.path.dirname(__file__), "data_logger_ui.pid")
 _LOGGER_PROCESS = None
-MARKET_TYPE_OPTIONS = ["btc_15m", "btc_5m"]
+MARKET_PROFILE_OPTIONS = ["btc_15m", "btc_5m"]
 
 
 def _listener_worker(url, out_queue, stop_event):
@@ -402,13 +402,13 @@ st.sidebar.caption(
 ws_url = st.sidebar.text_input("WebSocket URL", value=DEFAULT_WS_URL)
 default_profile = default_market_profile_key()
 default_profile_index = (
-    MARKET_TYPE_OPTIONS.index(default_profile)
-    if default_profile in MARKET_TYPE_OPTIONS
+    MARKET_PROFILE_OPTIONS.index(default_profile)
+    if default_profile in MARKET_PROFILE_OPTIONS
     else 0
 )
 selected_profile_key = st.sidebar.selectbox(
-    "Market type",
-    options=MARKET_TYPE_OPTIONS,
+    "Market profile",
+    options=MARKET_PROFILE_OPTIONS,
     index=default_profile_index,
     help="Select the profile used for market lists and logger startup arguments.",
 )
@@ -419,7 +419,9 @@ can_manage_logger = scheme in {"ws", ""} and host in {"127.0.0.1", "localhost"}
 _ensure_launch_log()
 _drain_launch_log_queue()
 st.sidebar.subheader("Logger Control")
-st.sidebar.caption(f"Logger start uses --market-type {selected_profile_key}.")
+st.sidebar.caption(
+    f"Logger start uses profile {selected_profile_key} (--market-type)."
+)
 if not can_manage_logger:
     st.sidebar.info("Start/Stop is available only for local ws:// endpoints.")
 
@@ -573,7 +575,9 @@ if override_market:
         )
 else:
     selected_market = current_market
-    st.sidebar.caption(f"Auto-advance enabled (next {selected_profile_key} market).")
+    st.sidebar.caption(
+        f"Auto-advance enabled (next market for profile {selected_profile_key})."
+    )
 
 _ensure_listener(ws_url)
 _drain_messages()
