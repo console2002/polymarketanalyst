@@ -83,13 +83,18 @@ def _format_timestamp_utc(value):
     return value.astimezone(pytz.utc).isoformat()
 
 
-def _get_data_file(timestamp_dt, data_subdir):
+def _get_data_file(timestamp_dt, profile_or_key=None):
     if not timestamp_dt:
         timestamp_dt = datetime.datetime.now(pytz.utc)
     if timestamp_dt.tzinfo is None:
         timestamp_dt = pytz.utc.localize(timestamp_dt)
+    if profile_or_key and hasattr(profile_or_key, "data_subdir"):
+        profile = profile_or_key
+    else:
+        profile_key = profile_or_key or default_market_profile_key()
+        profile = get_market_profile(profile_key)
     date_str = timestamp_dt.astimezone(TIMEZONE_ET).strftime(DATE_FORMAT)
-    return os.path.join(SCRIPT_DIR, "data", data_subdir, f"{date_str}.csv")
+    return os.path.join(SCRIPT_DIR, "data", profile.data_subdir, f"{date_str}.csv")
 
 
 def _ensure_csv(file_path):
@@ -483,7 +488,7 @@ class PriceAggregator:
         self._interval_seconds = _resolve_logging_interval()
         self._last_interval_bucket = None
         self.outcome_order = market_info.get("outcomes") or []
-        self.data_subdir = market_info.get("data_subdir", "15min")
+        self.profile_key = market_info.get("profile_key") or default_market_profile_key()
         self._current_file_path = None
         self._current_file_handle = None
         self._current_writer = None
@@ -624,7 +629,7 @@ class PriceAggregator:
 
         data_file = _get_data_file(
             self._event_timestamp(up_update, down_update, timestamp_dt),
-            self.data_subdir,
+            self.profile_key,
         )
         writer = self._get_writer(data_file)
         writer.writerows(rows)
@@ -732,7 +737,7 @@ async def run_logger(profile_key=None, broadcaster=None, stop_event=None):
                 continue
 
             aggregator = PriceAggregator(market_info, broadcaster=broadcaster)
-            _ensure_csv(_get_data_file(now, profile.data_subdir))
+            _ensure_csv(_get_data_file(now, profile))
             ws_logger = PolymarketWebsocketLogger(market_info, aggregator.handle_update)
             stop_task = asyncio.create_task(stop_event.wait())
             logger_task = asyncio.create_task(ws_logger.run())
