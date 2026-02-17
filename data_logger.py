@@ -888,7 +888,12 @@ def main():
         print(f"Invalid --market-type '{args.market_type}': {exc}")
         sys.exit(2)
 
-    print(f"Starting Data Logger... market_type={selected_profile.key}")
+    print(
+        "Starting Data Logger... "
+        f"market_profile={selected_profile.key} "
+        f"window_minutes={selected_profile.window_minutes} "
+        f"data_subdir={selected_profile.data_subdir}"
+    )
     broadcaster = None
     if args.ui_stream:
         broadcaster = LoggerStreamBroadcaster(
