@@ -12,7 +12,7 @@ from dashboard_processing import (
 )
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache", "second_entry")
-CACHE_SCHEMA_VERSION = 4
+CACHE_SCHEMA_VERSION = 5
 HOLD_EXIT_THRESHOLD = 0.99
 
 
@@ -53,20 +53,27 @@ def _get_data_signature(df, time_column, precomputed_groups, precomputed_target_
 
 def _build_second_entry_cache_key(
     data_signature,
+    minutes_after_open,
     entry_threshold,
     hold_until_close_threshold,
     second_entry_threshold,
     second_entry_mode,
     market_window_minutes,
 ):
+    minutes_after_open_value = float(minutes_after_open)
     payload = {
         "schema_version": CACHE_SCHEMA_VERSION,
         "data_signature": data_signature,
+        "minutes_after_open": minutes_after_open_value,
+        "minutes_after_open_precision_dp": len(
+            str(minutes_after_open).partition(".")[2].rstrip("0")
+        ),
         "entry_threshold": float(entry_threshold),
         "hold_until_close_threshold": float(hold_until_close_threshold),
         "second_entry_threshold": float(second_entry_threshold),
         "second_entry_mode": str(second_entry_mode),
         "market_window_minutes": int(market_window_minutes),
+        "cadence_window_key": f"{int(market_window_minutes)}m",
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -128,6 +135,7 @@ def calculate_market_trade_records_with_second_entry(
         data_signature = _get_data_signature(df, time_column, precomputed_groups, precomputed_target_order)
         cache_key = _build_second_entry_cache_key(
             data_signature,
+            minutes_after_open,
             entry_threshold,
             hold_until_close_threshold,
             second_entry_threshold,
