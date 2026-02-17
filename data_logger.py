@@ -700,10 +700,8 @@ class PriceAggregator:
         return max(numeric_ages)
 
 
-async def run_logger(selected_profile_key=None, broadcaster=None, stop_event=None):
-    selected_profile_key = selected_profile_key or default_market_profile_key()
-    profile = get_market_profile(selected_profile_key)
-    market_duration = datetime.timedelta(minutes=profile.window_minutes)
+async def run_logger(selected_profile_key, selected_profile, broadcaster=None, stop_event=None):
+    market_duration = datetime.timedelta(minutes=selected_profile.window_minutes)
     if stop_event is None:
         stop_event = asyncio.Event()
     if broadcaster:
@@ -739,7 +737,7 @@ async def run_logger(selected_profile_key=None, broadcaster=None, stop_event=Non
                 continue
 
             aggregator = PriceAggregator(market_info, broadcaster=broadcaster)
-            _ensure_csv(_get_data_file(now, profile))
+            _ensure_csv(_get_data_file(now, selected_profile))
             ws_logger = PolymarketWebsocketLogger(market_info, aggregator.handle_update)
             stop_task = asyncio.create_task(stop_event.wait())
             logger_task = asyncio.create_task(ws_logger.run())
@@ -800,11 +798,12 @@ def _install_signal_handlers(stop_event):
             loop.add_signal_handler(signum, stop_event.set)
 
 
-async def _run_with_signals(selected_profile_key, broadcaster):
+async def _run_with_signals(selected_profile, broadcaster):
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
     await run_logger(
-        selected_profile_key=selected_profile_key,
+        selected_profile_key=selected_profile.key,
+        selected_profile=selected_profile,
         broadcaster=broadcaster,
         stop_event=stop_event,
     )
@@ -821,7 +820,10 @@ def main():
         "--market-type",
         choices=MARKET_TYPE_CHOICES,
         default=default_market_profile_key(),
-        help="Market profile to track (default: btc_15m).",
+        help=(
+            "Market profile to track "
+            f"(default: {default_market_profile_key()})."
+        ),
     )
     parser.add_argument(
         "--ui-stream",
@@ -880,7 +882,7 @@ def main():
             port_fallback_attempts=args.ui_stream_port_fallbacks,
         )
     try:
-        asyncio.run(_run_with_signals(selected_profile.key, broadcaster))
+        asyncio.run(_run_with_signals(selected_profile, broadcaster))
     except KeyboardInterrupt:
         print("\nStopping logger...")
 
