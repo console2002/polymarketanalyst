@@ -2858,27 +2858,59 @@ def render_dashboard():
             render_profit_loss_section(summary_state)
             render_second_entry_summary(summary_state)
 
-        probability_renderer = render_probability_history
+        def _render_probability_chart(dataframe, window):
+            return render_probability_history(
+                dataframe,
+                window,
+                time_column,
+                show_markers,
+                minutes_after_open,
+                entry_threshold,
+                hold_until_close_threshold,
+                second_entry_mode,
+                second_entry_threshold,
+                selected_cadence_minutes,
+            )
+
         if st.session_state.get("auto_refresh", False):
-            probability_renderer = st.fragment(run_every=refresh_interval_seconds)(render_probability_history)
-        chart_result = probability_renderer(
-            df,
-            probability_window,
-            time_column,
-            show_markers,
-            minutes_after_open,
-            entry_threshold,
-            hold_until_close_threshold,
-            second_entry_mode,
-            second_entry_threshold,
-            selected_cadence_minutes,
-        )
+            @st.fragment(run_every=refresh_interval_seconds)
+            def _render_auto_refresh_chart():
+                latest_files_by_date, latest_legacy_path = _get_available_data_files_for_cadence(cadence_key)
+                latest_df, _, latest_load_warnings = load_data(
+                    selected_date,
+                    latest_files_by_date,
+                    latest_legacy_path,
+                    selected_cadence_minutes,
+                    cadence_key,
+                )
+                if latest_load_warnings:
+                    for warning in latest_load_warnings:
+                        st.warning(warning)
+
+                if latest_df is None or latest_df.empty:
+                    st.warning("No data found yet. Please ensure data_logger.py is running.")
+                    return
+
+                latest_df = latest_df.sort_values(time_column)
+                latest_window = prepare_probability_window(
+                    latest_df,
+                    time_column,
+                    lookback_period,
+                    resample_interval,
+                    jump_container,
+                )
+                latest_chart_result = _render_probability_chart(latest_df, latest_window)
+                st.caption(f"Last updated: {latest_chart_result['latest']['Timestamp']}")
+
+            _render_auto_refresh_chart()
+        else:
+            chart_result = _render_probability_chart(df, probability_window)
+            st.caption(f"Last updated: {chart_result['latest']['Timestamp']}")
 
         with st.expander("Window summary"):
             summary_df = pd.DataFrame(st.session_state.window_summary_rows)
             st.dataframe(summary_df, width='stretch')
 
-        st.caption(f"Last updated: {chart_result['latest']['Timestamp']}")
         progress_bar.progress(1.0, text="Dashboard ready.")
         status_container.update(state="complete", label="Dashboard ready")
         progress_container.empty()
