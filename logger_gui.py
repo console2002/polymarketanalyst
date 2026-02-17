@@ -545,6 +545,7 @@ buffer_size = st.sidebar.slider(
 )
 st.session_state.buffer_size = buffer_size
 st.sidebar.subheader("Market Selection")
+st.sidebar.caption("Auto-advance follows the next active market for the selected profile.")
 market_options = get_available_market_urls(profile_key=selected_profile_key)
 current_market = get_current_market_urls(profile_key=selected_profile_key)
 market_by_url = {market["polymarket"]: market for market in market_options}
@@ -576,7 +577,7 @@ if override_market:
 else:
     selected_market = current_market
     st.sidebar.caption(
-        f"Auto-advance enabled (next market for profile {selected_profile_key})."
+        f"Auto-advance enabled (next active market for profile {selected_profile_key})."
     )
 
 _ensure_listener(ws_url)
@@ -605,7 +606,9 @@ else:
 
 st.title("Live Logger Feed")
 st.caption(f"Logger status: {status_label}")
-st.caption(f"GUI Market [{selected_market.get('cadence_label', selected_profile_key)}]: {selected_market['polymarket']}")
+st.caption(
+    f"GUI Market [{selected_market.get('cadence_label', selected_profile_key)} | profile {selected_profile_key}]: {selected_market['polymarket']}"
+)
 if last_update:
     st.caption(f"Last update (UTC): {last_update}")
 else:
