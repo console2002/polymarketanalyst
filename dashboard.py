@@ -42,7 +42,6 @@ COARSE_AUTOTUNE_COLUMNS = [
     "run_id",
     "minutes_after_open",
     "entry_threshold",
-    "hold_until_close_threshold",
     "second_entry_threshold",
     "second_entry_mode",
     "strike_rate",
@@ -52,6 +51,7 @@ COARSE_AUTOTUNE_COLUMNS = [
     "expected_pnl",
     "total_count",
 ]
+HOLD_UNTIL_CLOSE_DISABLED_VALUE = 1.0
 
 
 def _get_cadence_autotune_config(cadence_key):
@@ -74,13 +74,13 @@ def _get_cadence_autotune_config(cadence_key):
             "minutes_after_open_min": 0.5,
             "minutes_after_open_max": 4.5,
             "minutes_after_open_default": 2.0,
-            "minutes_after_open_step": 1 / 12,
-            "minutes_after_open_help": "5min cadence: choose 5-second increments from 0:30 to 4:30 after market open.",
+            "minutes_after_open_step": 0.5,
+            "minutes_after_open_help": "5min cadence: choose 30-second increments from 0:30 to 4:30 after market open.",
             "coarse_minutes_min": 0.5,
             "coarse_minutes_max": 4.5,
             "coarse_minutes_default": (0.5, 4.5),
-            "coarse_minutes_step": 1 / 12,
-            "coarse_minutes_format": "%.3f",
+            "coarse_minutes_step": 0.5,
+            "coarse_minutes_format": "%.1f",
         },
     }
     config = base_config.get(cadence_key, base_config[DEFAULT_CADENCE_KEY]).copy()
@@ -92,8 +92,6 @@ def _get_cadence_autotune_config(cadence_key):
             "seconds_display_label": "{value} sec",
             "coarse_entry_step": 0.05,
             "coarse_entry_bounds": (0.52, 0.80),
-            "coarse_hold_step": 0.05,
-            "coarse_hold_bounds": (0.52, 0.85),
             "coarse_second_entry_step": 0.05,
             "coarse_second_entry_bounds": (0.40, 0.80),
         }
@@ -235,14 +233,7 @@ entry_threshold = st.sidebar.number_input(
     step=0.01,
     format="%.2f",
 )
-hold_until_close_threshold = st.sidebar.number_input(
-    "Hold Until Close Threshold",
-    min_value=0.0,
-    max_value=1.0,
-    value=0.80,
-    step=0.01,
-    format="%.2f",
-)
+hold_until_close_threshold = HOLD_UNTIL_CLOSE_DISABLED_VALUE
 second_entry_mode = st.sidebar.selectbox(
     "Second entry mode",
     options=("Off", "Additive", "Sole"),
@@ -666,7 +657,6 @@ def _prepare_coarse_results_df(results):
     numeric_columns = [
         "minutes_after_open",
         "entry_threshold",
-        "hold_until_close_threshold",
         "second_entry_threshold",
         "strike_rate",
         "win_rate_needed",
@@ -699,13 +689,11 @@ def _format_optimization_candidate_summary(result, selected_cadence):
         return "N/A"
     minutes_value_display = _format_minutes_for_ui(result.get("minutes_after_open"), selected_cadence)
     entry_threshold = result.get("entry_threshold")
-    hold_threshold = result.get("hold_until_close_threshold")
     second_entry_threshold = result.get("second_entry_threshold")
     expected_pnl = result.get("expected_pnl")
     total_count = result.get("total_count")
     second_entry_mode = result.get("second_entry_mode", "off")
     entry_threshold_display = f"{entry_threshold:.2f}" if pd.notna(entry_threshold) else "N/A"
-    hold_threshold_display = f"{hold_threshold:.2f}" if pd.notna(hold_threshold) else "N/A"
     second_entry_threshold_display = (
         f"{second_entry_threshold:.2f}" if pd.notna(second_entry_threshold) else "N/A"
     )
@@ -714,7 +702,6 @@ def _format_optimization_candidate_summary(result, selected_cadence):
     return (
         f"minutes_after_open={minutes_value_display}, "
         f"entry_threshold={entry_threshold_display}, "
-        f"hold_until_close_threshold={hold_threshold_display}, "
         f"second_entry_threshold={second_entry_threshold_display}, "
         f"second_entry_mode={second_entry_mode}, "
         f"expected_pnl={expected_pnl_display}, "
@@ -2112,10 +2099,8 @@ def render_strike_rate_section(
         coarse_minutes_default = cadence_autotune_config["coarse_minutes_default"]
         coarse_minutes_step = cadence_autotune_config["coarse_minutes_step"]
         coarse_entry_bounds = cadence_autotune_config["coarse_entry_bounds"]
-        coarse_hold_bounds = cadence_autotune_config["coarse_hold_bounds"]
         coarse_second_entry_bounds = cadence_autotune_config["coarse_second_entry_bounds"]
         coarse_entry_step = cadence_autotune_config["coarse_entry_step"]
-        coarse_hold_step = cadence_autotune_config["coarse_hold_step"]
         coarse_second_entry_step = cadence_autotune_config["coarse_second_entry_step"]
         coarse_minutes_format = cadence_autotune_config["coarse_minutes_format"]
 
@@ -2143,15 +2128,6 @@ def render_strike_rate_section(
             step=coarse_entry_step,
             format="%.2f",
             key="coarse_entry_threshold_range",
-        )
-        coarse_hold_range = st.slider(
-            "Hold until close threshold range",
-            min_value=coarse_hold_bounds[0],
-            max_value=coarse_hold_bounds[1],
-            value=coarse_hold_bounds,
-            step=coarse_hold_step,
-            format="%.2f",
-            key="coarse_hold_threshold_range",
         )
         coarse_second_entry_threshold_range = st.slider(
             "Second entry threshold range (phase 2 only)",
@@ -2190,7 +2166,6 @@ def render_strike_rate_section(
                 [
                     "minutes_after_open",
                     "entry_threshold",
-                    "hold_until_close_threshold",
                     "second_entry_mode",
                     "total_count",
                 ]
@@ -2200,7 +2175,6 @@ def render_strike_rate_section(
                 columns=[
                     "minutes_after_open",
                     "entry_threshold",
-                    "hold_until_close_threshold",
                     "second_entry_mode",
                     "total_count",
                 ]
@@ -2277,11 +2251,8 @@ def render_strike_rate_section(
                     st.session_state.coarse_autotune_save_path = save_path_value
                 resolved_save_path = _resolve_results_path(save_path_value) if save_results_enabled else None
 
-                # Phase 1: second entry forced off; hold fixed at baseline for fast scout
-                phase1_hold_values = _resolve_phase1_hold_values(
-                    hold_until_close_threshold,
-                    coarse_hold_range,
-                )
+                # Phase 1: second entry forced off; hold-until-close is always enabled.
+                phase1_hold_values = np.array([HOLD_UNTIL_CLOSE_DISABLED_VALUE])
                 phase1_combination_total = count_valid_parameter_combinations(
                     np.arange(
                         coarse_minutes_range[0],
@@ -2299,7 +2270,7 @@ def render_strike_rate_section(
                 )
                 phase1_caption = (
                     "Phase 1/2: scouting base entry setup with second-entry disabled "
-                    f"and fixed hold ({phase1_hold_values[0]:.2f}); "
+                    f"with hold-to-close only; "
                     f"combinations={phase1_combination_total}"
                 )
                 status_container.caption(phase1_caption)
@@ -2361,11 +2332,7 @@ def render_strike_rate_section(
                     )
                     phase2_combination_total = count_valid_parameter_combinations_for_pairs(
                         candidate_pairs,
-                        np.arange(
-                            coarse_hold_range[0],
-                            coarse_hold_range[1] + 0.001,
-                            coarse_hold_step,
-                        ),
+                        [HOLD_UNTIL_CLOSE_DISABLED_VALUE],
                         np.arange(
                             coarse_second_entry_threshold_range[0],
                             coarse_second_entry_threshold_range[1] + 0.001,
@@ -2375,7 +2342,7 @@ def render_strike_rate_section(
                     )
                     phase2_caption = (
                         f"Phase 2/2: refining {len(candidate_pairs)} top phase-1 candidates by sweeping "
-                        "hold, second-entry threshold, and second-entry mode "
+                        "second-entry threshold and second-entry mode "
                         f"(combinations={phase2_combination_total})"
                     )
                     status_container.caption(phase2_caption)
@@ -2386,11 +2353,7 @@ def render_strike_rate_section(
                         history_time_column,
                         _phase2_metrics,
                         minutes_entry_pairs=candidate_pairs,
-                        hold_until_close_threshold_range=np.arange(
-                            coarse_hold_range[0],
-                            coarse_hold_range[1] + 0.001,
-                            coarse_hold_step,
-                        ),
+                        hold_until_close_threshold_range=[HOLD_UNTIL_CLOSE_DISABLED_VALUE],
                         second_entry_threshold_range=np.arange(
                             coarse_second_entry_threshold_range[0],
                             coarse_second_entry_threshold_range[1] + 0.001,
@@ -2422,13 +2385,13 @@ def render_strike_rate_section(
                     summary_lines = [
                         f"Min samples filter: {min_total_count}",
                         (
-                            "Phase 1 (second-entry off, fixed hold) — "
+                            "Phase 1 (second-entry off, hold-to-close only) — "
                             f"evaluated={phase1_filter_summary['total_rows']}, "
                             f"removed={phase1_filter_summary['removed_rows']}, "
                             f"retained={phase1_filter_summary['retained_rows']}"
                         ),
                         (
-                            "Phase 2 (hold + second-entry threshold + mode sweep) — "
+                            "Phase 2 (second-entry threshold + mode sweep) — "
                             f"evaluated={phase2_filter_summary['total_rows']}, "
                             f"removed={phase2_filter_summary['removed_rows']}, "
                             f"retained={phase2_filter_summary['retained_rows']}"
@@ -2485,7 +2448,6 @@ def render_strike_rate_section(
             "Best optimized setup: "
             f"minutes_after_open={minutes_value_display}, "
             f"entry_threshold={result['entry_threshold']:.2f}, "
-            f"hold_until_close_threshold={result['hold_until_close_threshold']:.2f}, "
             f"second_entry_threshold={result['second_entry_threshold']:.2f}, "
             f"second_entry_mode={result['second_entry_mode']}, "
             f"expected_pnl={expected_pnl_display}, "
@@ -2564,7 +2526,6 @@ def render_coarse_results_explorer(results_df, objective, selected_cadence):
     filtered_df = filtered_df.dropna(
         subset=[
             "entry_threshold",
-            "hold_until_close_threshold",
             objective_column,
         ]
     )
@@ -2592,7 +2553,7 @@ def render_coarse_results_explorer(results_df, objective, selected_cadence):
     fig = px.scatter(
         filtered_df,
         x="entry_threshold",
-        y="hold_until_close_threshold",
+        y="second_entry_threshold",
         color=objective_column,
         facet_col=facet_col,
         facet_row=facet_row,
@@ -2602,7 +2563,7 @@ def render_coarse_results_explorer(results_df, objective, selected_cadence):
     fig.update_layout(
         height=450 + 200 * max(0, len(mode_selection) - 1),
         xaxis_title="Entry threshold",
-        yaxis_title="Hold until close threshold",
+        yaxis_title="Second entry threshold",
         coloraxis_colorbar=dict(title=objective_column.replace("_", " ").title()),
     )
     st.plotly_chart(fig, width="stretch")

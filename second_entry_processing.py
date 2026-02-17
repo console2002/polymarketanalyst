@@ -155,7 +155,6 @@ def calculate_market_trade_records_with_second_entry(
     # delays eligibility and can shift threshold-crossing detection by a full sample.
     minutes_threshold = pd.Timedelta(minutes=float(minutes_after_open))
     probability_threshold = float(entry_threshold)
-    hold_threshold = float(hold_until_close_threshold)
     second_threshold = float(second_entry_threshold)
     entry_mode = (second_entry_mode or "off").lower()
 
@@ -257,25 +256,10 @@ def calculate_market_trade_records_with_second_entry(
             and not pd.isna(entry_price)
         )
         if entry_valid and entry_price > 0:
-            side_column = "UpPrice" if expected_side == "Up" else "DownPrice"
-            eligible_after_entry = eligible[eligible[time_column] >= entry_time]
-            if entry_price >= hold_threshold:
-                exit_time = market_close_time
-                exit_reason = "held_to_close"
-            else:
-                exit_cross_index = _find_threshold_crossing(eligible_after_entry[side_column], hold_threshold)
-                if exit_cross_index is not None:
-                    exit_time = eligible_after_entry.loc[exit_cross_index, time_column]
-                    exit_price = eligible_after_entry.loc[exit_cross_index, side_column]
-                    exit_price_market = exit_price
-                    exit_reason = "threshold"
-                else:
-                    exit_time = market_close_time
-                    exit_reason = "held_to_close"
-
-            if exit_time == market_close_time:
-                exit_price = close_up if expected_side == "Up" else close_down
-                exit_price_market = exit_price
+            exit_time = market_close_time
+            exit_reason = "held_to_close"
+            exit_price = close_up if expected_side == "Up" else close_down
+            exit_price_market = exit_price
 
         if entry_mode == "additive" and second_entry_taken:
             if second_entry_time is None or exit_time is None or second_entry_time > exit_time:
