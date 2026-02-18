@@ -1122,6 +1122,10 @@ def _initialize_strike_rate_state(
         st.session_state.optimization_message = None
     if "optimization_notice" not in st.session_state:
         st.session_state.optimization_notice = None
+    if "optimization_best_phase1_off" not in st.session_state:
+        st.session_state.optimization_best_phase1_off = None
+    if "optimization_best_mode_results" not in st.session_state:
+        st.session_state.optimization_best_mode_results = {}
     if "strike_sample_size" not in st.session_state:
         st.session_state.strike_sample_size = None
     if "autotune_sample_size" not in st.session_state:
@@ -2165,39 +2169,30 @@ def render_strike_rate_section(
 
     def _build_filter_summary(df, minimum_samples):
         total_rows = int(len(df))
-        removed_df = df[df["total_count"] < minimum_samples].copy()
-        retained_count = total_rows - int(len(removed_df))
-        removed_count = int(len(removed_df))
-        if not removed_df.empty:
-            dropped_preview = removed_df.sort_values("total_count", ascending=True).head(10).copy()
-            dropped_preview = dropped_preview[
-                [
-                    "minutes_after_open",
-                    "entry_threshold",
-                    "second_entry_mode",
-                    "total_count",
-                ]
+        retained_count = total_rows
+        removed_count = 0
+        dropped_preview = pd.DataFrame(
+            columns=[
+                "minutes_after_open",
+                "entry_threshold",
+                "second_entry_mode",
+                "total_count",
             ]
-        else:
-            dropped_preview = pd.DataFrame(
-                columns=[
-                    "minutes_after_open",
-                    "entry_threshold",
-                    "second_entry_mode",
-                    "total_count",
-                ]
-            )
+        )
         return {
             "total_rows": total_rows,
             "removed_rows": removed_count,
             "retained_rows": retained_count,
             "dropped_preview": dropped_preview,
+            "meets_minimum_pool_size": total_rows >= int(minimum_samples),
         }
 
     if optimization_clicked:
         st.session_state.optimization_log_lines = []
         st.session_state.optimization_notice = None
         st.session_state.optimization_filter_summaries = None
+        st.session_state.optimization_best_phase1_off = None
+        st.session_state.optimization_best_mode_results = {}
         _append_optimization_log("Starting optimization run (phase 1 + phase 2)", optimization_log_placeholder)
         if not coarse_second_entry_modes:
             st.session_state.optimization_result = None
@@ -2309,21 +2304,16 @@ def render_strike_rate_section(
                     st.session_state.optimization_message = "No viable phase-1 candidates"
                     st.session_state.coarse_autotune_results_df = None
                 else:
-                    phase1_eligible_df = phase1_df[phase1_df["total_count"] >= min_total_count]
-                    phase1_candidates_df = phase1_eligible_df if not phase1_eligible_df.empty else phase1_df
-                    if phase1_eligible_df.empty:
-                        top_phase1_fallback = _select_best_coarse_result(phase1_df, "expected_pnl")
-                        fallback_summary = _format_optimization_candidate_summary(
-                            top_phase1_fallback,
-                            selected_cadence,
-                        )
+                    phase1_candidates_df = phase1_df
+                    if not phase1_filter_summary["meets_minimum_pool_size"]:
                         notice = (
-                            f"No phase-1 candidates met minimum sample count ({min_total_count}). "
-                            "Proceeding with lower-sample candidates. "
-                            f"Top fallback phase-1 candidate: {fallback_summary}"
+                            f"Phase-1 candidate pool is below the configured minimum ({len(phase1_df)} "
+                            f"candidates vs target {min_total_count}). Proceeding with available candidates."
                         )
                         st.session_state.optimization_notice = notice
                         _append_optimization_log(notice, optimization_log_placeholder)
+                    top_phase1_result = _select_best_coarse_result(phase1_candidates_df, "expected_pnl")
+                    st.session_state.optimization_best_phase1_off = top_phase1_result
                     top_n = min(8, len(phase1_candidates_df))
                     top_phase1 = phase1_candidates_df.sort_values(
                         by=["minutes_after_open", "entry_threshold", "expected_pnl"],
@@ -2381,50 +2371,45 @@ def render_strike_rate_section(
                     )
                     results_df = results_df.dropna(subset=["expected_pnl", "total_count"])
                     phase2_filter_summary = _build_filter_summary(results_df, min_total_count)
+                    if not phase2_filter_summary["meets_minimum_pool_size"]:
+                        notice = (
+                            f"Phase-2 candidate pool is below the configured minimum ({len(results_df)} "
+                            f"candidates vs target {min_total_count})."
+                        )
+                        st.session_state.optimization_notice = notice
+                        _append_optimization_log(notice, optimization_log_placeholder)
                     st.session_state.optimization_filter_summaries = {
                         "min_autotune_samples": min_total_count,
                         "phase_1": phase1_filter_summary,
                         "phase_2": phase2_filter_summary,
                     }
                     summary_lines = [
-                        f"Min samples filter: {min_total_count}",
+                        f"Min candidate pool target: {min_total_count}",
                         (
                             "Phase 1 (second-entry off) — "
                             f"evaluated={phase1_filter_summary['total_rows']}, "
-                            f"removed={phase1_filter_summary['removed_rows']}, "
-                            f"retained={phase1_filter_summary['retained_rows']}"
+                            f"meets_target={phase1_filter_summary['meets_minimum_pool_size']}"
                         ),
                         (
                             "Phase 2 (second-entry threshold + mode sweep) — "
                             f"evaluated={phase2_filter_summary['total_rows']}, "
-                            f"removed={phase2_filter_summary['removed_rows']}, "
-                            f"retained={phase2_filter_summary['retained_rows']}"
+                            f"meets_target={phase2_filter_summary['meets_minimum_pool_size']}"
                         ),
                     ]
                     status_container.warning("\n\n".join(summary_lines), icon="⚠️")
-                    dropped_candidates_df = phase2_filter_summary["dropped_preview"]
-                    if not dropped_candidates_df.empty:
-                        status_container.caption(
-                            "Top dropped phase-2 candidates (lowest sample counts):"
-                        )
-                        status_container.dataframe(dropped_candidates_df, width='stretch', hide_index=True)
-                    eligible_results_df = results_df[results_df["total_count"] >= min_total_count]
-                    final_results_df = eligible_results_df if not eligible_results_df.empty else results_df
-                    if eligible_results_df.empty and not results_df.empty:
-                        top_phase2_fallback = _select_best_coarse_result(results_df, "expected_pnl")
-                        fallback_summary = _format_optimization_candidate_summary(
-                            top_phase2_fallback,
-                            selected_cadence,
-                        )
-                        notice = (
-                            f"No phase-2 candidates met minimum sample count ({min_total_count}). "
-                            "Showing best lower-sample result. "
-                            f"Top fallback phase-2 candidate: {fallback_summary}"
-                        )
-                        st.session_state.optimization_notice = notice
-                        _append_optimization_log(notice, optimization_log_placeholder)
+                    final_results_df = results_df
                     st.session_state.coarse_autotune_results_df = final_results_df
                     best_result = _select_best_coarse_result(final_results_df, "expected_pnl")
+                    best_mode_results = {}
+                    for mode in ["additive", "sole"]:
+                        mode_df = final_results_df[
+                            final_results_df["second_entry_mode"]
+                            == _normalize_second_entry_mode(mode)
+                        ]
+                        mode_best_result = _select_best_coarse_result(mode_df, "expected_pnl")
+                        if mode_best_result:
+                            best_mode_results[mode] = mode_best_result
+                    st.session_state.optimization_best_mode_results = best_mode_results
                     if best_result:
                         st.session_state.optimization_result = best_result
                         st.session_state.optimization_message = None
@@ -2439,6 +2424,24 @@ def render_strike_rate_section(
     optimization_notice = st.session_state.get("optimization_notice")
     if optimization_notice:
         st.info(optimization_notice)
+
+    best_phase1_off = st.session_state.get("optimization_best_phase1_off")
+    best_mode_results = st.session_state.get("optimization_best_mode_results", {})
+    if best_phase1_off:
+        st.caption(
+            "Best settings phase 1 (second-entry off): "
+            f"{_format_optimization_candidate_summary(best_phase1_off, selected_cadence)}"
+        )
+    if best_mode_results.get("additive"):
+        st.caption(
+            "Best settings phase 2 (additive): "
+            f"{_format_optimization_candidate_summary(best_mode_results['additive'], selected_cadence)}"
+        )
+    if best_mode_results.get("sole"):
+        st.caption(
+            "Best settings phase 2 (sole): "
+            f"{_format_optimization_candidate_summary(best_mode_results['sole'], selected_cadence)}"
+        )
 
     if st.session_state.optimization_result:
         result = st.session_state.optimization_result
@@ -2485,18 +2488,13 @@ def render_coarse_results_explorer(results_df, objective, selected_cadence):
         phase_1 = filter_summaries.get("phase_1", {})
         phase_2 = filter_summaries.get("phase_2", {})
         st.caption(
-            "Sample filtering summary "
+            "Candidate pool summary "
             f"(min={min_samples}) — "
             f"Phase 1: evaluated={phase_1.get('total_rows', 0)}, "
-            f"removed={phase_1.get('removed_rows', 0)}, retained={phase_1.get('retained_rows', 0)}; "
+            f"meets_target={phase_1.get('meets_minimum_pool_size', False)}; "
             f"Phase 2: evaluated={phase_2.get('total_rows', 0)}, "
-            f"removed={phase_2.get('removed_rows', 0)}, retained={phase_2.get('retained_rows', 0)}"
+            f"meets_target={phase_2.get('meets_minimum_pool_size', False)}"
         )
-
-        dropped_candidates_df = phase_2.get("dropped_preview")
-        if isinstance(dropped_candidates_df, pd.DataFrame) and not dropped_candidates_df.empty:
-            st.caption("Dropped phase-2 candidates preview")
-            st.dataframe(dropped_candidates_df, width='stretch', hide_index=True)
     objective_column = "expected_pnl" if objective == "expected_pnl" else "edge"
     minutes_values = sorted(
         {
@@ -2705,12 +2703,15 @@ def render_dashboard():
         )
     )
     min_autotune_samples = st.sidebar.number_input(
-        "Minimum optimization samples",
+        "Minimum optimization candidate pool",
         min_value=50,
         max_value=5000,
         value=int(st.session_state.get("min_autotune_samples", 200)),
         step=25,
-        help="Candidates below this count are excluded from optimization ranking.",
+        help=(
+            "Target minimum number of candidate settings evaluated in each phase. "
+            "Used as a pool-size quality check; it does not filter out individual settings by trade count."
+        ),
     )
     st.session_state.min_autotune_samples = int(min_autotune_samples)
 
