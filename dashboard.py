@@ -1608,8 +1608,9 @@ def render_probability_history(
     current_range = None
     if st.session_state.zoom_mode == 'last_market':
         end_time = df_window[time_column].max()
-        start_time = end_time - pd.Timedelta(minutes=selected_cadence_minutes)
-        current_range = [start_time, end_time]
+        aligned_start = align_market_open(end_time, selected_cadence_minutes)
+        aligned_end = aligned_start + pd.Timedelta(minutes=selected_cadence_minutes) - pd.Timedelta(seconds=1)
+        current_range = [aligned_start, aligned_end]
 
     trace_mode = "lines+markers" if show_markers else "lines"
     colors = {

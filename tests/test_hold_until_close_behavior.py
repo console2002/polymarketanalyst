@@ -1,6 +1,6 @@
 import pandas as pd
 
-from dashboard_processing import calculate_market_trade_records
+from dashboard_processing import _resolve_market_winner, calculate_market_trade_records
 from second_entry_processing import calculate_market_trade_records_with_second_entry
 
 
@@ -149,3 +149,17 @@ def test_second_entry_processing_uses_volume_as_tiebreaker_when_close_prices_are
     assert record["winning_side"] == "Up"
     assert record["winning_side_method"] == "volume"
     assert record["outcome"] == "Win"
+
+
+def test_resolve_market_winner_uses_pre_collapse_snapshot_when_both_close_prices_are_near_zero():
+    market_group = pd.DataFrame(
+        {
+            "UpPrice": [0.90, 0.97, 0.01],
+            "DownPrice": [0.10, 0.03, 0.01],
+        }
+    )
+
+    winner, method = _resolve_market_winner(market_group, close_up=0.01, close_down=0.01)
+
+    assert winner == "Up"
+    assert method == "pre_collapse_price"
