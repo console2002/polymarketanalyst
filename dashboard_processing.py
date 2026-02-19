@@ -86,6 +86,23 @@ def _resolve_market_winner(market_group, close_up, close_down, tie_tolerance=0.0
         if abs(last_up - last_down) > tie_tolerance:
             return ("Up", "last_price") if last_up > last_down else ("Down", "last_price")
 
+    # 4) Resolve end-of-window feed collapse where both sides print near-zero at expiry.
+    # Walk backward to find the latest decisive price snapshot before the collapse.
+    collapse_threshold = 0.05
+    if {"UpPrice", "DownPrice"}.issubset(market_group.columns):
+        recent = market_group[["UpPrice", "DownPrice"]].dropna()
+        if not recent.empty:
+            for _, row in recent.iloc[::-1].iterrows():
+                up_price = _clean_value(row["UpPrice"])
+                down_price = _clean_value(row["DownPrice"])
+                if pd.isna(up_price) or pd.isna(down_price):
+                    continue
+                if up_price <= collapse_threshold and down_price <= collapse_threshold:
+                    continue
+                if abs(up_price - down_price) > tie_tolerance:
+                    return ("Up", "pre_collapse_price") if up_price > down_price else ("Down", "pre_collapse_price")
+                break
+
     return None, "indeterminate"
 
 
