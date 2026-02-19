@@ -8,11 +8,12 @@ import pandas as pd
 from dashboard_processing import (
     _find_threshold_crossing,
     _get_close_prices,
+    _resolve_market_winner,
     align_market_open,
 )
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache", "second_entry")
-CACHE_SCHEMA_VERSION = 7
+CACHE_SCHEMA_VERSION = 8
 EARLY_CLOSE_THRESHOLD = 0.99
 
 
@@ -291,20 +292,18 @@ def calculate_market_trade_records_with_second_entry(
                 entry_price = np.mean([trigger_price, second_entry_price])
                 position_multiplier = 2
 
+        winning_side, winning_side_method = _resolve_market_winner(market_group, close_up, close_down)
+
         outcome = None
         if market_closed:
             if trade_executed and expected_side:
                 if exit_reason == "threshold":
                     outcome = "Win"
                 else:
-                    if pd.isna(close_up) or pd.isna(close_down):
+                    if winning_side is None:
                         outcome = "N/A"
-                    elif close_up == close_down:
-                        outcome = "Tie"
-                    elif expected_side == "Up":
-                        outcome = "Win" if close_up > close_down else "Lose"
                     else:
-                        outcome = "Win" if close_down > close_up else "Lose"
+                        outcome = "Win" if expected_side == winning_side else "Lose"
         else:
             if trade_executed:
                 outcome = "Pending"
@@ -336,6 +335,8 @@ def calculate_market_trade_records_with_second_entry(
                     "outcome": outcome,
                     "close_up": close_up,
                     "close_down": close_down,
+                    "winning_side": winning_side,
+                    "winning_side_method": winning_side_method,
                     "market_closed": market_closed,
                 }
             )
