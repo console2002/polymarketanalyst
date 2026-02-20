@@ -54,6 +54,15 @@ COARSE_AUTOTUNE_COLUMNS = [
 HOLD_UNTIL_CLOSE_DISABLED_VALUE = 1.0
 
 
+def _is_missing(value):
+    if value is None:
+        return True
+    try:
+        return pd.isna(value)
+    except TypeError:
+        return False
+
+
 def _get_cadence_autotune_config(cadence_key):
     base_config = {
         "15min": {
@@ -562,7 +571,14 @@ def _load_second_entry_cache(cache_path):
     for column in datetime_columns:
         if column in cached_df.columns:
             cached_df[column] = pd.to_datetime(cached_df[column], errors="coerce")
-    return cached_df.to_dict("records")
+    records = cached_df.to_dict("records")
+    normalized_records = []
+    for record in records:
+        normalized_record = {}
+        for key, value in record.items():
+            normalized_record[key] = None if _is_missing(value) else value
+        normalized_records.append(normalized_record)
+    return normalized_records
 
 
 def _write_second_entry_cache(cache_path, trade_records):
@@ -1009,9 +1025,9 @@ def _calculate_window_summary(
     )
 
     for record in trade_records:
-        if record["expected_side"] is None or record["entry_price"] is None:
+        if _is_missing(record.get("expected_side")) or _is_missing(record.get("entry_price")):
             continue
-        if record["exit_price"] is None or record["exit_reason"] is None:
+        if _is_missing(record.get("exit_price")) or _is_missing(record.get("exit_reason")):
             continue
         if not record["market_closed"] or record["outcome"] == "Pending":
             continue
@@ -1696,7 +1712,7 @@ def render_probability_history(
                 line_color="rgba(200, 200, 200, 0.4)",
             )
 
-        if record["entry_time"] is not None and record["entry_price"] is not None:
+        if pd.notna(record.get("entry_time")) and pd.notna(record.get("entry_price")):
             if record.get("entry_mode") == "additive" and record.get("trigger_price") is not None:
                 entry_times.append(record["entry_time"])
                 entry_prices.append(record["trigger_price"])
@@ -1708,7 +1724,7 @@ def render_probability_history(
                 entry_prices.append(record["entry_price"])
 
         exit_price_display = record.get("exit_price_market", record["exit_price"])
-        if record["exit_time"] is not None and exit_price_display is not None and not pd.isna(exit_price_display):
+        if pd.notna(record.get("exit_time")) and pd.notna(exit_price_display):
             if record["exit_reason"] == "threshold":
                 exit_times.append(record["exit_time"])
                 exit_prices.append(exit_price_display)
@@ -1811,7 +1827,7 @@ def render_probability_history(
         template="plotly_white",
         hovermode="x unified",
         xaxis_title="Time",
-        yaxis=dict(title="Probability", range=[0, 1.05]),
+        yaxis=dict(title="Probability", range=[0, 1]),
         xaxis=dict(rangeslider=dict(visible=False), type="date"),
     )
     # Explicitly set range for the chart x-axis.
