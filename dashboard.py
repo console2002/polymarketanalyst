@@ -1694,6 +1694,7 @@ def render_probability_history(
     exit_prices = []
     held_times = []
     held_prices = []
+    outcome_summaries = []
 
     for target_time in ordered_targets:
         market_group = df_window[df_window["TargetTime_dt"] == target_time].sort_values(time_column)
@@ -1739,15 +1740,7 @@ def render_probability_history(
                 outcome_text = f"{record['outcome']} (close)"
 
             outcome_color = "#00AA00" if record["outcome"] == "Win" else "#FF0000"
-            fig.add_annotation(
-                x=record["exit_time"] or record["market_close_time"],
-                y=1.03,
-                text=outcome_text,
-                showarrow=False,
-                font=dict(color=outcome_color, size=16),
-                row=1,
-                col=1,
-            )
+            outcome_summaries.append((outcome_text, outcome_color))
 
     if entry_times:
         fig.add_trace(
@@ -1814,6 +1807,27 @@ def render_probability_history(
             col=1,
         )
 
+    if outcome_summaries:
+        max_visible_outcomes = 5
+        visible_outcomes = outcome_summaries[-max_visible_outcomes:]
+        if len(outcome_summaries) > max_visible_outcomes:
+            hidden_count = len(outcome_summaries) - max_visible_outcomes
+            visible_outcomes.insert(0, (f"+{hidden_count} more outcomes", "#666666"))
+
+        for idx, (outcome_text, outcome_color) in enumerate(visible_outcomes):
+            fig.add_annotation(
+                x=1.03,
+                y=0.87 - (idx * 0.06),
+                xref="paper",
+                yref="paper",
+                xanchor="left",
+                yanchor="top",
+                align="left",
+                text=outcome_text,
+                showarrow=False,
+                font=dict(color=outcome_color, size=16),
+            )
+
     # Add vertical lines for market transitions to both plots
     # Identify where TargetTime changes
     transitions = df_window.loc[df_window['TargetTime'].shift() != df_window['TargetTime'], time_column].iloc[1:]
@@ -1826,6 +1840,8 @@ def render_probability_history(
         height=600,
         template="plotly_white",
         hovermode="x unified",
+        legend=dict(x=1.03, y=0.98, xanchor="left", yanchor="top"),
+        margin=dict(r=230),
         xaxis_title="Time",
         yaxis=dict(title="Probability", range=[0, 1]),
         xaxis=dict(rangeslider=dict(visible=False), type="date"),
